@@ -1,0 +1,24 @@
+# NVIDIA installers
+*.run
+
+# Test files and experiments
+test-*
+!tests/
+
+# Build outputs
+result
+result-*
+
+# Symlinks to nix store
+cutlass-src
+llvm-git
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*~
+.nixd.json
+.nil.toml
+.direnv
+.devshell
