@@ -43,7 +43,7 @@ let
       sha256_aarch64 = "sha256-qp/N1hl6S+97qB8fDMeMcrpx8KXZjwKBJsOj0QESQ9E=";
       openSha256 = "sha256-ImvqLI/mrtKWG7IxCQO5L4dxuCHbf3QWeDWFjVRIpPc=";
       settingsSha256 = "sha256-qp/N1hl6S+97qB8fDMeMcrpx8KXZjwKBJsOj0QESQ9E=";
-      persistencedSha256 = "sha256-fI2IPJRqaCCawKHuao5M1y6TH4v0zCdGoO6VjrRFoKE=";
+      persistencedSha256 = "sha256-j74m3tAYON/q8WLU9Xioo3CkOSXfo1CwGmDx/ot0uUo=";
     };
 
     # CUDA 13.0.0-13.0.1
