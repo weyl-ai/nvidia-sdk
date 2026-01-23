@@ -42,7 +42,7 @@ let
       sha256_64bit = "sha256-tSJAm9S0lLymVKGgiHxiNC+c3yjtPS6u7earj6Q7zaI=";
       sha256_aarch64 = "sha256-qp/N1hl6S+97qB8fDMeMcrpx8KXZjwKBJsOj0QESQ9E=";
       openSha256 = "sha256-ImvqLI/mrtKWG7IxCQO5L4dxuCHbf3QWeDWFjVRIpPc=";
-      settingsSha256 = "sha256-qp/N1hl6S+97qB8fDMeMcrpx8KXZjwKBJsOj0QESQ9E=";
+      settingsSha256 = "sha256-sI/ly6gNaUw0QZFWWkMbrkSstzf0hvcdSaogTUoTecI=";
       persistencedSha256 = "sha256-j74m3tAYON/q8WLU9Xioo3CkOSXfo1CwGmDx/ot0uUo=";
     };
 
