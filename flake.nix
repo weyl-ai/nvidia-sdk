@@ -150,6 +150,9 @@
                 nvtop
                 btop-nvml
                 monitoring-tools
+
+                # Model runners
+                phi4-nvfp4-runner
                 ;
               # Expose patched LLVM for testing
               clang-sm120 = pkgs'.llvmPackages_20.clang;
@@ -393,6 +396,12 @@
               type = "app";
               program = "${pkgs'.monitoring-tools}/bin/gpu-monitor";
               meta.description = "Quick GPU monitoring dashboard";
+            };
+
+            phi4-nvfp4 = {
+              type = "app";
+              program = "${pkgs'.phi4-nvfp4-runner}/bin/phi4-nvfp4";
+              meta.description = "Run Phi-4 NVFP4 with TensorRT-LLM";
             };
           };
         };
@@ -711,6 +720,12 @@
               nccl = final.nccl;
               tensorrt = final.tensorrt;
               cutensor = final.cutensor;
+            };
+
+            # Phi-4 NVFP4 runner (TensorRT-LLM)
+            phi4-nvfp4-runner = final.callPackage ./nix/phi4-nvfp4-runner.nix {
+              tritonserver-trtllm = final.tritonserver-trtllm;
+              cuda = final.cuda;
             };
 
             # Example packages to demonstrate SDK functionality
