@@ -153,6 +153,7 @@
 
                 # Model runners
                 phi4-nvfp4-runner
+                tritonserver-phi4
                 ;
               # Expose patched LLVM for testing
               clang-sm120 = pkgs'.llvmPackages_20.clang;
@@ -402,6 +403,12 @@
               type = "app";
               program = "${pkgs'.phi4-nvfp4-runner}/bin/phi4-nvfp4";
               meta.description = "Run Phi-4 NVFP4 with TensorRT-LLM";
+            };
+
+            tritonserver-phi4 = {
+              type = "app";
+              program = "${pkgs'.tritonserver-phi4}/bin/tritonserver-phi4";
+              meta.description = "Triton Inference Server for Phi-4 FP4";
             };
           };
         };
@@ -724,6 +731,12 @@
 
             # Phi-4 NVFP4 runner (TensorRT-LLM)
             phi4-nvfp4-runner = final.callPackage ./nix/phi4-nvfp4-runner.nix {
+              tritonserver-trtllm = final.tritonserver-trtllm;
+              cuda = final.cuda;
+            };
+
+            # Triton Inference Server for Phi-4 FP4
+            tritonserver-phi4 = final.callPackage ./nix/tritonserver-phi4.nix {
               tritonserver-trtllm = final.tritonserver-trtllm;
               cuda = final.cuda;
             };
