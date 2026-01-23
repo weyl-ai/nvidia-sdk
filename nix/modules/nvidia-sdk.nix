@@ -39,7 +39,7 @@ let
   driverPresets = {
     # CUDA 13.0.2+ / Blackwell SM120 support
     "580.119.02" = {
-      sha256_64bit = "sha256-tSJAm9S0lLymVKGgiHxiNC+c3yjtPS6u7earj6Q7zaI=";
+      sha256_64bit = "sha256-gCD139PuiK7no4mQ0MPSr+VHUemhcLqerdfqZwE47Nc=";
       sha256_aarch64 = "sha256-qp/N1hl6S+97qB8fDMeMcrpx8KXZjwKBJsOj0QESQ9E=";
       openSha256 = "sha256-l3IQDoopOt0n0+Ig+Ee3AOcFCGJXhbH1Q1nh1TEAHTE=";
       settingsSha256 = "sha256-sI/ly6gNaUw0QZFWWkMbrkSstzf0hvcdSaogTUoTecI=";
