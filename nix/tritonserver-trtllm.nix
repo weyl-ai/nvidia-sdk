@@ -64,7 +64,7 @@
   rtmpdump,
   systemd,
   tensorrt,
-  triton-container,
+  triton-trtllm-container,
   tzdata,
   util-linux,
   versions,
@@ -148,14 +148,14 @@ let
     libxcrypt
   ];
 
-  # include triton-container so its /usr/lib* get onto RPATH as well
-  runpath = modern.mk-runpath (runtime-inputs ++ [ triton-container ]);
+  # include triton-trtllm-container so its /usr/lib* get onto RPATH as well
+  runpath = modern.mk-runpath (runtime-inputs ++ [ triton-trtllm-container ]);
 
 in
 stdenv.mkDerivation {
-  pname = "tritonserver";
-  version = versions.triton-container.version;
-  src = triton-container;
+  pname = "tritonserver-trtllm";
+  version = versions.triton-trtllm-container.version;
+  src = triton-trtllm-container;
 
   nativeBuildInputs = [
     autoPatchelfHook
@@ -344,7 +344,7 @@ stdenv.mkDerivation {
   '';
 
   meta = {
-    description = "NVIDIA Triton Inference Server ${versions.triton-container.version}";
+    description = "NVIDIA Triton Inference Server with TensorRT-LLM Backend ${versions.triton-trtllm-container.version}";
     homepage = "https://developer.nvidia.com/nvidia-triton-inference-server";
     license = lib.licenses.bsd3;
     platforms = [

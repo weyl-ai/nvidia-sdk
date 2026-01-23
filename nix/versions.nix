@@ -188,17 +188,33 @@
     hash = "sha256-uOfSEjbwn/edHEgBikC9wAarn6c6T71ebPg74rv2qlw=";
   };
 
+  # Triton Inference Server container (standard backends)
   triton-container = {
-    version = "25.11";
+    version = "25.12";
 
     x86_64-linux = {
-      ref = "nvcr.io/nvidia/tritonserver:25.11-py3";
-      hash = "sha256-yrTbMURSSc5kx4KTegTErpDjCWcjb9Ehp7pOUtP34pM=";
+      ref = "nvcr.io/nvidia/tritonserver:25.12-py3";
+      hash = "sha256-zBUmKGBhSi9bLcQzHVnsCLABea2UY4P9Cg0gcpSloWE=";
     };
 
     aarch64-linux = {
-      ref = "nvcr.io/nvidia/tritonserver:25.11-py3-igpu";
-      hash = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";  # TODO: update when needed
+      ref = "nvcr.io/nvidia/tritonserver:25.12-py3-igpu";
+      hash = "sha256-0000000000000000000000000000000000000000000=";  # TODO: update when needed
+    };
+  };
+
+  # Triton Inference Server with TensorRT-LLM backend
+  triton-trtllm-container = {
+    version = "25.12";
+
+    x86_64-linux = {
+      ref = "nvcr.io/nvidia/tritonserver:25.12-trtllm-python-py3";
+      hash = "sha256-0000000000000000000000000000000000000000000=";  # TODO: fetch actual hash
+    };
+
+    aarch64-linux = {
+      ref = "nvcr.io/nvidia/tritonserver:25.12-trtllm-python-py3-igpu";
+      hash = "sha256-0000000000000000000000000000000000000000000=";  # TODO: update when needed
     };
   };
 

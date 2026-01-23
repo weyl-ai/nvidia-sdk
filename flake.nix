@@ -141,9 +141,13 @@
 
                 # Additional tools
                 tritonserver
+                tritonserver-trtllm
                 tensorrt-samples
                 nsight-gui-apps
                 nsight-dl-designer
+                
+                # LLM Examples
+                phi4-nvfp4-trtllm
                 
                 # GPU Monitoring
                 nvtop
@@ -198,6 +202,7 @@
                   cutlass
                   nvidia-sdk
                   tritonserver
+                  tritonserver-trtllm
                   cuda-samples
                   nccl-tests
                   cutlass-examples
@@ -255,7 +260,8 @@
                     hardware.nvidia-sdk = {
                       enable = true;
                       cudaVersion = "13.0.2";
-                      addToSystemPackages = true;
+                      expose = "system";
+                      container.enable = false;  # Disable in test to avoid driver assertions
                     };
 
                     # Mock nvidia driver to avoid hardware dependency
@@ -278,6 +284,7 @@
                     hardware.nvidia-sdk = {
                       enable = true;
                       cudaVersion = "13.0.1";
+                      container.enable = false;  # Disable in test to avoid driver assertions
                     };
 
                     hardware.nvidia.package = pkgs.linuxPackages.nvidia_x11;
@@ -359,6 +366,12 @@
               program = "${pkgs'.monitoring-tools}/bin/gpu-monitor";
               meta.description = "Quick GPU monitoring dashboard";
             };
+
+            phi4-nvfp4-trtllm = {
+              type = "app";
+              program = "${pkgs'.phi4-nvfp4-trtllm}/bin/phi4-nvfp4-trtllm";
+              meta.description = "Run Phi-4 NVFP4 model with TensorRT-LLM";
+            };
           };
         };
 
@@ -374,6 +387,12 @@
               name = "triton-${versions.triton-container.version}-rootfs";
               image-ref = versions.triton-container.${final.stdenv.hostPlatform.system}.ref;
               hash = versions.triton-container.${final.stdenv.hostPlatform.system}.hash;
+            };
+
+            triton-trtllm-container = extract.container-to-nix {
+              name = "triton-trtllm-${versions.triton-trtllm-container.version}-rootfs";
+              image-ref = versions.triton-trtllm-container.${final.stdenv.hostPlatform.system}.ref;
+              hash = versions.triton-trtllm-container.${final.stdenv.hostPlatform.system}.hash;
             };
 
             versions = import ./nix/versions.nix;
@@ -663,6 +682,15 @@
               cutensor = final.cutensor;
             };
 
+            tritonserver-trtllm = final.callPackage ./nix/tritonserver-trtllm.nix {
+              inherit versions triton-trtllm-container modern;
+              cuda = final.cuda;
+              cudnn = final.cudnn;
+              nccl = final.nccl;
+              tensorrt = final.tensorrt;
+              cutensor = final.cutensor;
+            };
+
             # Example packages to demonstrate SDK functionality
             cuda-samples = final.callPackage ./nix/cuda-samples.nix {
               inherit versions;
@@ -748,6 +776,12 @@
             nvtop = final.monitoring-tools-pkg.nvtop;
             btop-nvml = final.monitoring-tools-pkg.btop;
             monitoring-tools = final.monitoring-tools-pkg.monitoring-tools;
+
+            # LLM Examples - Phi-4 FP4 with TensorRT-LLM
+            phi4-nvfp4-trtllm = final.callPackage ./nix/phi4-nvfp4-trtllm.nix {
+              tritonserver-trtllm = final.tritonserver-trtllm;
+              cuda = final.cuda;
+            };
           };
 
         # NixOS module for declarative NVIDIA driver + CUDA installation

@@ -294,11 +294,8 @@ in
       # Wrapped programs (explicit dependencies)
       (lib.mkIf (cfg.wrapPrograms != [ ]) (map wrapWithCuda cfg.wrapPrograms))
       
-      # GPU monitoring tools - disabled, install separately via:
-      # - nix-shell -p nvtop btop
-      # - home-manager: home.packages = [ pkgs.nvtop pkgs.btop ];
-      # - environment.systemPackages = [ pkgs.nvtop pkgs.btop ];
-      # (lib.mkIf cfg.monitoring.enable [ pkgs.nvtop pkgs.btop ])
+      # GPU monitoring tools
+      (lib.mkIf cfg.monitoring.enable [ pkgs.monitoring-tools ])
     ];
 
     # ──────────────────────────────────────────────────────────────────────
