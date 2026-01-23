@@ -1,117 +1,126 @@
-# Example NixOS configuration using libmodern-nvidia-sdk
+# Example NixOS configuration using nvidia-sdk
 #
 # This example shows how to declaratively configure NVIDIA CUDA on NixOS
-# using the libmodern-nvidia-sdk flake.
+# using the nvidia-sdk flake.
 
 { config, pkgs, inputs, ... }:
 
 {
   imports = [
-    # Import the CUDA module from libmodern-nvidia-sdk
-    inputs.libmodern-nvidia-sdk.nixosModules.default
+    # Import the NVIDIA SDK NixOS module
+    inputs.nvidia-sdk.nixosModules.default
   ];
 
   # Apply the overlay to get CUDA packages
   nixpkgs.overlays = [
-    inputs.libmodern-nvidia-sdk.overlays.default
+    inputs.nvidia-sdk.overlays.default
   ];
 
-  # Configure NVIDIA SDK
+  # ════════════════════════════════════════════════════════════════════════════
+  # NVIDIA SDK Configuration
+  # ════════════════════════════════════════════════════════════════════════════
+
   hardware.nvidia-sdk = {
     enable = true;
 
-    # Choose your CUDA version
-    # Available: "12.9.1", "13.0.0", "13.0.1", "13.0.2", "13.1"
-    cudaVersion = "13.0.2";
+    # Driver version (580.119.02 has preset hashes, or specify your own)
+    driver.version = "580.119.02";
 
-    # Optional: specify a custom CUDA package
-    # cudaPackage = pkgs.cuda; # defaults to the version specified above
+    # Use open kernel module (required for Blackwell, recommended for Turing+)
+    open = true;
 
-    # Add CUDA to system packages (default: true)
-    addToSystemPackages = true;
+    # CUDA version (optional, defaults to latest)
+    # cudaVersion = "13.0.2";
 
-    # Set CUDA as default runtime (adds to PATH, LD_LIBRARY_PATH)
-    setDefaultRuntime = true;
+    # ──────────────────────────────────────────────────────────────────────────
+    # System Integration
+    # ──────────────────────────────────────────────────────────────────────────
 
-    # Enable OpenGL support (required for most CUDA apps)
-    opengl.enable = true;
+    # Add CUDA to PATH (nvcc, cuda-gdb, etc.)
+    systemPackages = true;
+
+    # Set CUDA_PATH and CUDA_HOME environment variables
+    environmentVariables = true;
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # FHS Compatibility
+    # ──────────────────────────────────────────────────────────────────────────
+
+    # Create /usr/lib/cuda symlink (for tools expecting FHS paths)
+    fhs.enable = true;
+    fhs.path = "/usr/lib/cuda";
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # Services
+    # ──────────────────────────────────────────────────────────────────────────
+
+    # nvidia-persistenced for headless/server use
+    persistenced = true;
+
+    # Container GPU passthrough (Docker/Podman with CDI)
+    container.enable = true;
+
+    # Power management (for laptops)
+    powerManagement = false;
   };
 
-  # The module automatically:
-  # - Enables the NVIDIA driver
-  # - Configures OpenGL/Vulkan support
-  # - Sets up environment variables
-  # - Adds CUDA to system packages
-  # - Validates driver version compatibility
+  # ════════════════════════════════════════════════════════════════════════════
+  # Docker (if using containers)
+  # ════════════════════════════════════════════════════════════════════════════
 
-  # Additional NVIDIA configuration (optional)
-  hardware.nvidia = {
-    # Use open-source kernel module (Turing+)
-    open = false;
+  virtualisation.docker.enable = true;
 
-    # Enable nvidia-settings menu
-    nvidiaSettings = true;
+  # ════════════════════════════════════════════════════════════════════════════
+  # Additional CUDA Libraries (optional)
+  # ════════════════════════════════════════════════════════════════════════════
 
-    # Enable modesetting (required for Wayland)
-    modesetting.enable = true;
-
-    # Power management
-    powerManagement = {
-      enable = false; # Set to true for laptops
-      finegrained = false;
-    };
-  };
-
-  # Optional: Add additional NVIDIA SDK components
   environment.systemPackages = with pkgs; [
-    # Core CUDA toolkit (automatically included if addToSystemPackages = true)
-    # cuda
-
-    # Deep learning libraries
+    # Deep learning
     cudnn
     nccl
     tensorrt
     cutensor
 
-    # Development tools
+    # Development
     cuda-samples
-    nccl-tests
-
-    # Profiling tools (GUI apps)
-    nsight-gui-apps
-
-    # CUTLASS for high-performance GEMM
     cutlass
-    cutlass-examples
-    cute-examples
+
+    # Profiling (GUI)
+    nsight-gui-apps
   ];
-
-  # Optional: Enable Docker with NVIDIA container runtime
-  virtualisation.docker = {
-    enable = true;
-    enableNvidia = true; # Requires hardware.nvidia-sdk.enable = true
-  };
-
-  # Optional: Per-user CUDA installation (instead of system-wide)
-  # Set addToSystemPackages = false and use:
-  # users.users.youruser.packages = [ pkgs.cuda ];
 }
 
-# Usage in flake.nix:
+# ══════════════════════════════════════════════════════════════════════════════
+# Usage in flake.nix
+# ══════════════════════════════════════════════════════════════════════════════
 #
 # {
 #   inputs = {
 #     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
-#     libmodern-nvidia-sdk.url = "github:yourorg/libmodern-nvidia-sdk";
+#     nvidia-sdk.url = "github:weyl-ai/nvidia-sdk";
 #   };
 #
-#   outputs = { nixpkgs, libmodern-nvidia-sdk, ... }: {
-#     nixosConfigurations.yourhostname = nixpkgs.lib.nixosSystem {
+#   outputs = { nixpkgs, nvidia-sdk, ... }: {
+#     nixosConfigurations.myhost = nixpkgs.lib.nixosSystem {
 #       system = "x86_64-linux";
-#       specialArgs = { inputs = { inherit libmodern-nvidia-sdk; }; };
-#       modules = [
-#         ./configuration.nix
-#       ];
+#       specialArgs = { inherit inputs; };
+#       modules = [ ./configuration.nix ];
 #     };
 #   };
 # }
+#
+# ══════════════════════════════════════════════════════════════════════════════
+# Minimal Example
+# ══════════════════════════════════════════════════════════════════════════════
+#
+# hardware.nvidia-sdk = {
+#   enable = true;
+#   driver.version = "580.119.02";
+#   open = true;
+# };
+#
+# That's it! The module handles:
+# - Driver installation with correct kernel module
+# - OpenGL/Vulkan setup
+# - nvidia-persistenced service
+# - Modesetting for Wayland

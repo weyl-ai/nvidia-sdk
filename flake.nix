@@ -141,6 +141,7 @@
 
                 # Additional tools
                 tritonserver
+                tritonserver-trtllm
                 tensorrt-samples
                 nsight-gui-apps
                 nsight-dl-designer
@@ -245,6 +246,8 @@
               };
 
               # NixOS module tests
+              # NOTE: These run in VMs without real GPU hardware, so we test configuration
+              # parsing only, not actual GPU functionality
               nixosModuleChecks = {
                 module-loads = pkgs'.testers.nixosTest {
                   name = "nvidia-sdk-module-loads";
@@ -255,7 +258,10 @@
                     hardware.nvidia-sdk = {
                       enable = true;
                       cudaVersion = "13.0.2";
-                      addToSystemPackages = true;
+                      systemPackages = true;
+                      environmentVariables = true;
+                      container.enable = false;  # Can't test in VM without real hardware
+                      persistenced = false;  # Requires actual driver
                     };
 
                     # Mock nvidia driver to avoid hardware dependency
@@ -264,8 +270,8 @@
 
                   testScript = ''
                     machine.wait_for_unit("multi-user.target")
-                    machine.succeed("test -f /etc/nvidia-sdk-version")
-                    machine.succeed("test -n $CUDA_PATH")
+                    machine.succeed("test -f /etc/nvidia-sdk/version")
+                    machine.succeed("test -n \"$CUDA_PATH\"")
                   '';
                 };
 
@@ -278,6 +284,8 @@
                     hardware.nvidia-sdk = {
                       enable = true;
                       cudaVersion = "13.0.1";
+                      container.enable = false;
+                      persistenced = false;
                     };
 
                     hardware.nvidia.package = pkgs.linuxPackages.nvidia_x11;
@@ -285,8 +293,35 @@
 
                   testScript = ''
                     machine.wait_for_unit("multi-user.target")
-                    output = machine.succeed("cat /etc/nvidia-sdk-version")
+                    output = machine.succeed("cat /etc/nvidia-sdk/version")
                     assert "13.0.1" in output, f"Expected CUDA 13.0.1, got: {output}"
+                  '';
+                };
+
+                # Test FHS path creation
+                module-fhs-path = pkgs'.testers.nixosTest {
+                  name = "nvidia-sdk-fhs-path";
+                  nodes.machine = { config, pkgs, ... }: {
+                    imports = [ inputs.self.nixosModules.default ];
+                    nixpkgs.overlays = [ inputs.self.overlays.default ];
+
+                    hardware.nvidia-sdk = {
+                      enable = true;
+                      fhs.enable = true;
+                      fhs.path = "/usr/lib/cuda";
+                      container.enable = false;
+                      persistenced = false;
+                    };
+
+                    hardware.nvidia.package = pkgs.linuxPackages.nvidia_x11;
+                  };
+
+                  testScript = ''
+                    machine.wait_for_unit("multi-user.target")
+                    # Check that the symlink exists
+                    machine.succeed("test -L /usr/lib/cuda")
+                    # Check that it points to a valid location
+                    machine.succeed("test -d /usr/lib/cuda/bin")
                   '';
                 };
               };
@@ -374,6 +409,12 @@
               name = "triton-${versions.triton-container.version}-rootfs";
               image-ref = versions.triton-container.${final.stdenv.hostPlatform.system}.ref;
               hash = versions.triton-container.${final.stdenv.hostPlatform.system}.hash;
+            };
+
+            triton-trtllm-container = extract.container-to-nix {
+              name = "triton-trtllm-${versions.triton-trtllm-container.version}-rootfs";
+              image-ref = versions.triton-trtllm-container.${final.stdenv.hostPlatform.system}.ref;
+              hash = versions.triton-trtllm-container.${final.stdenv.hostPlatform.system}.hash;
             };
 
             versions = import ./nix/versions.nix;
@@ -663,6 +704,15 @@
               cutensor = final.cutensor;
             };
 
+            tritonserver-trtllm = final.callPackage ./nix/tritonserver-trtllm.nix {
+              inherit versions triton-trtllm-container modern;
+              cuda = final.cuda;
+              cudnn = final.cudnn;
+              nccl = final.nccl;
+              tensorrt = final.tensorrt;
+              cutensor = final.cutensor;
+            };
+
             # Example packages to demonstrate SDK functionality
             cuda-samples = final.callPackage ./nix/cuda-samples.nix {
               inherit versions;
@@ -753,6 +803,10 @@
         # NixOS module for declarative NVIDIA driver + CUDA installation
         nixosModules.default = import ./nix/modules/nvidia-sdk.nix;
         nixosModules.nvidia-sdk = import ./nix/modules/nvidia-sdk.nix;
+
+        # flake-parts flakeModule for easy integration
+        flakeModules.default = import ./nix/modules/flake-module.nix;
+        flakeModules.nvidia-sdk = import ./nix/modules/flake-module.nix;
       };
     };
 }

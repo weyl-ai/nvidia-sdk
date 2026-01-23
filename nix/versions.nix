@@ -189,15 +189,30 @@
   };
 
   triton-container = {
-    version = "25.11";
+    version = "25.12";
 
     x86_64-linux = {
-      ref = "nvcr.io/nvidia/tritonserver:25.11-py3";
-      hash = "sha256-yrTbMURSSc5kx4KTegTErpDjCWcjb9Ehp7pOUtP34pM=";
+      ref = "nvcr.io/nvidia/tritonserver:25.12-py3";
+      hash = "sha256-HbL0FJ/c7UdLn8xIGBw5Vs5V+6cIo9vvZQPJH+x+R9E=";
     };
 
     aarch64-linux = {
-      ref = "nvcr.io/nvidia/tritonserver:25.11-py3-igpu";
+      ref = "nvcr.io/nvidia/tritonserver:25.12-py3-igpu";
+      hash = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";  # TODO: update when needed
+    };
+  };
+
+  # TensorRT-LLM Triton container (separate from standard triton)
+  triton-trtllm-container = {
+    version = "25.12";
+
+    x86_64-linux = {
+      ref = "nvcr.io/nvidia/tritonserver:25.12-trtllm-python-py3";
+      hash = "sha256-WvHGKXzu1oJk8RRorIDaF9Ii6AuK6eAD7SIWRxs0vkk=";
+    };
+
+    aarch64-linux = {
+      ref = "nvcr.io/nvidia/tritonserver:25.12-trtllm-python-py3";
       hash = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";  # TODO: update when needed
     };
   };
