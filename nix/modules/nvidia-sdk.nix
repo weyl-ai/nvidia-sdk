@@ -269,6 +269,24 @@ in
       '';
     };
 
+    docker.enable = lib.mkOption {
+      type = lib.types.bool;
+      default = false;
+      description = ''
+        Enable Docker with GPU support.
+        Sets up Docker daemon with CDI enabled for GPU passthrough.
+      '';
+    };
+
+    docker.rootless = lib.mkOption {
+      type = lib.types.bool;
+      default = false;
+      description = ''
+        Enable rootless Docker with GPU support.
+        Requires container.enable = true.
+      '';
+    };
+
     # ──────────────────────────────────────────────────────────────────────────
     # Power Management
     # ──────────────────────────────────────────────────────────────────────────
@@ -357,9 +375,24 @@ in
 
     hardware.nvidia-container-toolkit.enable = lib.mkIf cfg.container.enable true;
 
-    virtualisation.docker = lib.mkIf cfg.container.enable {
-      daemon.settings.features.cdi = true;
-    };
+    # Docker configuration
+    virtualisation.docker = lib.mkMerge [
+      # Root daemon
+      (lib.mkIf cfg.docker.enable {
+        enable = true;
+        enableOnBoot = lib.mkDefault true;
+        autoPrune.enable = lib.mkDefault true;
+        daemon.settings.features.cdi = lib.mkIf cfg.container.enable true;
+      })
+      # Rootless daemon
+      (lib.mkIf cfg.docker.rootless {
+        rootless = {
+          enable = true;
+          setSocketVariable = true;
+          daemon.settings.features.cdi = lib.mkIf cfg.container.enable true;
+        };
+      })
+    ];
 
     virtualisation.podman = lib.mkIf (cfg.container.enable && config.virtualisation.podman.enable) {
       extraPackages = [ pkgs.nvidia-container-toolkit ];
