@@ -9,7 +9,7 @@ in extract.extract {
   version = versions.cudnn.version;
 
   src = fetchurl {
-    url = src-info.url;
+    url = src-info.urls.mirror;
     hash = src-info.hash;
   };
 

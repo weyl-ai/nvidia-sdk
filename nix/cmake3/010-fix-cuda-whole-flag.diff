@@ -1,0 +1,15 @@
+--- a/Modules/CMakeDetermineCompilerABI.cmake
++++ b/Modules/CMakeDetermineCompilerABI.cmake
+@@ -70,6 +70,11 @@ function(CMAKE_DETERMINE_COMPILER_ABI lang src)
+     else()
+       # Use the preprocessor to detect whether the linker is the
+       # AIX linker.
++      # Fix for _CMAKE_CUDA_WHOLE_FLAG missing variable
++      if(NOT DEFINED _CMAKE_CUDA_WHOLE_FLAG AND ${lang} STREQUAL "CUDA")
++        set(_CMAKE_CUDA_WHOLE_FLAG "-Xcompiler")
++      endif()
++
+       execute_process(
+         COMMAND ${CMAKE_${lang}_COMPILER} ${CMAKE_${lang}_COMPILER_ARG1}
+                 ${CMAKE_${lang}_FLAGS} ${src_copy} -E -dM -
+ 

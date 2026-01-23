@@ -12,12 +12,12 @@
 
 let
   system = stdenv.hostPlatform.system;
-  src-info = versions.tensorrt.${system} or (throw "tensorrt: unsupported system ${system}");
+  src-info = versions.tensorrt-rtx.${system} or (throw "tensorrt: unsupported system ${system}");
 
 in
 extract.extract {
-  pname = "tensorrt";
-  version = versions.tensorrt.version;
+  pname = "tensorrt-rtx";
+  version = versions.tensorrt-rtx.version;
 
   src = fetchurl {
     url = src-info.urls.mirror;
@@ -41,9 +41,10 @@ extract.extract {
   '';
 
   meta = {
-    description = "NVIDIA TensorRT ${versions.tensorrt.version}";
-    homepage = "https://developer.nvidia.com/tensorrt";
+    description = "NVIDIA TensorRT-RTX ${versions.tensorrt.version}";
+    homepage = "https://developer.nvidia.com/tensorrt-rtx";
     license = lib.licenses.unfree;
+
     platforms = [
       "x86_64-linux"
       "aarch64-linux"

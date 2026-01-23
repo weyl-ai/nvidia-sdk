@@ -1,30 +1,185 @@
-{ lib, stdenv, autoPatchelfHook, file, patchelf, makeWrapper, python312
-, abseil-cpp, boost, curl, gperftools, grpc, libevent, libuuid, numactl
-, openmpi, openssl, protobuf, rapidjson, re2, zlib, libxml2, libarchive
-, icu, lz4, nettle, acl, cyrus_sasl, gnutls, libssh, openldap, rtmpdump
-, versions, cuda, cudnn, nccl, tensorrt, cutensor, triton-container }:
+{
+  lib,
+  stdenv,
+  fetchurl,
+  autoPatchelfHook,
+  modern,
+  file,
+  patchelf,
+  makeWrapper,
+  python312,
+  abseil-cpp,
+  acl,
+  audit,
+  boost,
+  bzip2,
+  cuda,
+  cudnn,
+  curl,
+  cutensor,
+  cyrus_sasl,
+  db,
+  dbus,
+  e2fsprogs,
+  expat,
+  gdbm,
+  glib,
+  gnutls,
+  gperftools,
+  grpc,
+  icu,
+  keyutils,
+  libarchive,
+  libbsd,
+  libcap,
+  libcap_ng,
+  libevent,
+  libffi,
+  libgcrypt,
+  libgpg-error,
+  libkrb5,
+  libmd,
+  libselinux,
+  libsemanage,
+  libsepol,
+  libssh,
+  libuuid,
+  libxcrypt,
+  libxml2,
+  lz4,
+  nccl,
+  ncurses,
+  nettle,
+  numactl,
+  openldap,
+  openmpi,
+  openssl,
+  pam,
+  pcre,
+  pcre2,
+  protobuf,
+  rapidjson,
+  re2,
+  readline,
+  rtmpdump,
+  systemd,
+  tensorrt,
+  triton-container,
+  tzdata,
+  util-linux,
+  versions,
+  xz,
+  zlib,
+}:
 
 let
   python = python312;
 
+  libxml2-legacy = libxml2.overrideAttrs (_: rec {
+    version = "2.9.14";
+    src = fetchurl {
+      url = "https://download.gnome.org/sources/libxml2/${lib.versions.majorMinor version}/libxml2-${version}.tar.xz";
+      sha256 = "sha256-YNdKJX0czsBHXnScui8hVZ5IE577pv8oIkNXx8eY3+4=";
+    };
+  });
+
   runtime-inputs = [
-    cuda cudnn nccl tensorrt cutensor
-    abseil-cpp boost curl gperftools grpc libevent libuuid numactl
-    openmpi openssl protobuf rapidjson re2 stdenv.cc.cc.lib zlib
-    python libxml2 libarchive icu lz4 nettle acl
-    cyrus_sasl gnutls libssh openldap rtmpdump
+    cuda
+    cudnn
+    nccl
+    tensorrt
+    cutensor
+    abseil-cpp
+    boost
+    curl
+    gperftools
+    grpc
+    libevent
+    libuuid
+    numactl
+    openmpi
+    openssl
+    protobuf
+    rapidjson
+    re2
+    zlib
+    stdenv.cc.cc.lib
+    python
+    libxml2-legacy
+    libarchive
+    icu
+    lz4
+    nettle
+    acl
+    cyrus_sasl
+    gnutls
+    libssh
+    openldap
+    rtmpdump
+    expat
+    ncurses
+    bzip2
+    xz
+    libffi
+    glib
+    pcre2
+    systemd
+    libgcrypt
+    libgpg-error
+    libcap
+    libcap_ng
+    audit
+    libselinux
+    libsemanage
+    libsepol
+    pcre
+    libkrb5
+    keyutils
+    dbus
+    pam
+    e2fsprogs.dev
+    util-linux
+    libmd
+    libbsd
+    readline
+    gdbm
+    db
+    tzdata
+    libxcrypt
   ];
 
-in stdenv.mkDerivation {
+  # include triton-container so its /usr/lib* get onto RPATH as well
+  runpath = modern.mk-runpath (runtime-inputs ++ [ triton-container ]);
+
+in
+stdenv.mkDerivation {
   pname = "tritonserver";
   version = versions.triton-container.version;
-
   src = triton-container;
 
-  nativeBuildInputs = [ autoPatchelfHook file patchelf makeWrapper ];
+  nativeBuildInputs = [
+    autoPatchelfHook
+    file
+    patchelf
+    makeWrapper
+  ];
   buildInputs = runtime-inputs;
 
-  dontAutoPatchelf = true;
+  autoPatchelfIgnoreMissingDeps = [
+    "libcuda.so.1"
+    "libLLVM.so.18.1"
+    "libgc.so.1"
+    "libobjc_gc.so.4.0.0"
+    "libonig.so.5"
+    "libmpfr.so.6"
+    "libxxhash.so.0"
+    "libjq.so.1.0.4"
+    "libcaffe2_nvrtc.so"
+    "libsasl2.so.2"
+    "libapt-pkg.so.6.0"
+    "libapt-private.so.0.0"
+  ];
+
   dontUnpack = true;
   dontConfigure = true;
   dontBuild = true;
@@ -32,6 +187,79 @@ in stdenv.mkDerivation {
   installPhase = ''
     mkdir -p $out/{bin,lib,include,backends,python}
 
+    copy_one() {
+      local pattern="$1" extra="$2"
+      local f
+      f=$(find "$src" -name "$pattern" -type f 2>/dev/null | head -1 || true)
+      [ -z "$f" ] && return 0
+      echo "Copying $pattern from $f"
+      cp -a "$f" $out/lib/
+      base=$(basename "$f")
+      eval "$extra"
+    }
+
+    # libcupti
+    copy_one "libcupti.so*" '
+      ( cd $out/lib;
+        ln -sf "$base" libcupti.so.13 || true
+        ln -sf "$base" libcupti.so || true
+      )
+    '
+
+    # libb64
+    find $src -name "libb64.so*" -type f 2>/dev/null -exec cp -a {} $out/lib/ \;
+
+    # libdcgm* and libdcgmmoduleconfig*
+    find $src -path "*/libdcgm*.so*" -type f 2>/dev/null | while read -r f; do
+      echo "Copying DCGM lib from $f"
+      cp -a "$f" $out/lib/
+      base=$(basename "$f")
+      case "$base" in
+        libdcgm.so.*)
+          ( cd $out/lib; ln -sf "$base" libdcgm.so.4 || true; ln -sf "$base" libdcgm.so || true )
+          ;;
+        libdcgmmoduleconfig.so.*)
+          ( cd $out/lib; ln -sf "$base" libdcgmmoduleconfig.so.4 || true; ln -sf "$base" libdcgmmoduleconfig.so || true )
+          ;;
+      esac
+    done
+
+    # libcusparseLt
+    find $src -name "libcusparseLt.so*" -type f 2>/dev/null | while read -r f; do
+      echo "Copying libcusparseLt from $f"
+      cp -a "$f" $out/lib/
+      base=$(basename "$f")
+      ( cd $out/lib; ln -sf "$base" libcusparseLt.so.0 || true; ln -sf "$base" libcusparseLt.so || true )
+    done
+
+    # libnvshmem*
+    find $src -name "libnvshmem*.so*" -type f 2>/dev/null | while read -r f; do
+      echo "Copying libnvshmem from $f"
+      cp -a "$f" $out/lib/
+      base=$(basename "$f")
+      case "$base" in
+        libnvshmem_host*.so*)
+          ( cd $out/lib; ln -sf "$base" libnvshmem_host.so.3 || true; ln -sf "$base" libnvshmem_host.so || true )
+          ;;
+      esac
+    done
+
+    # libcaffe2_nvrtc
+    find $src -name "libcaffe2_nvrtc.so*" -type f 2>/dev/null -exec cp -a {} $out/lib/ \;
+
+    # ICU 74 from container
+    find $src -name "libicu*.so.74*" -type f 2>/dev/null | while read -r f; do
+      echo "Copying ICU lib from $f"
+      cp -a "$f" $out/lib/
+      base=$(basename "$f")
+      libname=''${base%%.so.*}
+      ( cd $out/lib;
+        ln -sf "$base" "$libname.so.74" || true
+        ln -sf "$base" "$libname.so" || true
+      )
+    done
+
+    # tritonserver tree
     if [ -d $src/opt/tritonserver ]; then
       cp -a $src/opt/tritonserver/* $out/
       chmod -R u+w $out
@@ -39,12 +267,14 @@ in stdenv.mkDerivation {
 
     [ -d $out/lib ] && [ ! -e $out/lib64 ] && ln -s lib $out/lib64
 
+    # tensorrt_llm
     if [ -d $src/opt/tensorrt_llm ]; then
       mkdir -p $out/tensorrt_llm
       cp -a $src/opt/tensorrt_llm/* $out/tensorrt_llm/
       chmod -R u+w $out/tensorrt_llm
     fi
 
+    # Python bits
     for pydir in \
       $src/usr/lib/python3/dist-packages \
       $src/usr/local/lib/python3.12/dist-packages \
@@ -52,70 +282,60 @@ in stdenv.mkDerivation {
     do
       [ -d "$pydir" ] && cp -a "$pydir"/* $out/python/ 2>/dev/null || true
     done
-    chmod -R u+w $out/python 2>/dev/null || true
 
-    for libdir in \
-      $src/usr/lib/x86_64-linux-gnu \
-      $src/usr/lib \
-      $src/usr/local/lib \
-      $src/opt/*/lib \
-      $src/lib/x86_64-linux-gnu \
-      $src/lib
-    do
-      if [ -d "$libdir" ]; then
-        find "$libdir" -maxdepth 1 \( -name "*.so" -o -name "*.so.*" \) -type f 2>/dev/null | \
-          while read f; do
-            case "$(basename "$f")" in
-              libc.so*|libm.so*|libpthread.so*|libdl.so*|ld-linux*.so*) continue ;;
-              *) cp -an "$f" $out/lib/ 2>/dev/null || true ;;
-            esac
-          done
-      fi
-    done
+    # NCCL from Nix
+    if [ -d ${nccl}/lib ]; then
+      for lib in ${nccl}/lib/libnccl*.so*; do
+        [ -f "$lib" ] || continue
+        ln -sf "$lib" $out/lib/$(basename "$lib") || true
+        base=$(basename "$lib")
+        case "$base" in
+          libnccl.so.[0-9]*)
+            ( cd $out/lib; ln -sf "$base" libnccl.so.2 || true; ln -sf "$base" libnccl.so || true )
+            ;;
+        esac
+      done
+    fi
 
-    for pattern in "libcupti.so*" "libnvshmem*.so*" "libcaffe2_nvrtc.so*" "libdcgm.so*"; do
-      find $src -name "$pattern" -type f 2>/dev/null | \
-        while read f; do cp -an "$f" $out/lib/ 2>/dev/null || true; done
-    done
+    # generic .so → .so.* symlinks
+    if [ -d $out/lib ]; then
+      cd $out/lib
+      for lib in *.so.*; do
+        [ -f "$lib" ] || continue
+        base=''${lib%%.so.*}
+        [ -e "$base.so" ] || ln -sf "$lib" "$base.so" 2>/dev/null || true
+      done
+    fi
 
-    pushd $out/lib
-    for lib in *.so.*; do
-      if [ -f "$lib" ]; then
-        base=$(echo "$lib" | sed 's/\.so\..*//')
-        ln -sf "$lib" "$base.so" 2>/dev/null || true
-      fi
-    done
-    popd
+    chmod -R u+w $out || true
 
-    find $out -type f -name "*.py" -o -type f -perm /u+x | while read -r f; do
-      if [ -f "$f" ] && head -1 "$f" 2>/dev/null | grep -q '^#!.*python'; then
+    # fix python shebangs
+    find $out -type f \( -name "*.py" -o -perm -0100 \) | while read -r f; do
+      [ -f "$f" ] || continue
+      if head -1 "$f" 2>/dev/null | grep -q '^#!.*python'; then
         sed -i "1s|^#!.*python.*|#!${python}/bin/python|" "$f" 2>/dev/null || true
       fi
     done
   '';
 
-  fixupPhase = ''
-    local libPaths="$out/lib:$out/tensorrt_llm/lib:${lib.makeLibraryPath runtime-inputs}"
+  preFixup = ''
+    addAutoPatchelfSearchPath $out/lib
+    addAutoPatchelfSearchPath $out/tensorrt_llm/lib
+    ${modern.patch-elf {
+      inherit runpath;
+      out = "$out";
+    }}
+  '';
 
-    find $out -type f | while read -r f; do
-      if file "$f" | grep -q "ELF"; then
-        if file "$f" | grep -q "ELF.*executable"; then
-          patchelf --set-interpreter "$(cat $NIX_CC/nix-support/dynamic-linker)" "$f" 2>/dev/null || true
-        fi
-        patchelf --set-rpath "$libPaths" "$f" 2>/dev/null || true
-        patchelf --shrink-rpath "$f" 2>/dev/null || true
-      fi
-    done
-
-    autoPatchelf $out || true
+  postFixup = ''
+    libPaths="$out/lib:$out/tensorrt_llm/lib:${runpath}"
 
     for exe in $out/bin/*; do
-      if [ -f "$exe" ] && [ -x "$exe" ]; then
-        wrapProgram "$exe" \
-          --set TRITON_SERVER_ROOT "$out" \
-          --prefix LD_LIBRARY_PATH : "$libPaths" \
-          --prefix PYTHONPATH : "$out/python"
-      fi
+      [ -f "$exe" ] && [ -x "$exe" ] || continue
+      wrapProgram "$exe" \
+        --set TRITON_SERVER_ROOT "$out" \
+        --prefix LD_LIBRARY_PATH : "$libPaths" \
+        --prefix PYTHONPATH : "$out/python"
     done
   '';
 
@@ -123,7 +343,10 @@ in stdenv.mkDerivation {
     description = "NVIDIA Triton Inference Server ${versions.triton-container.version}";
     homepage = "https://developer.nvidia.com/nvidia-triton-inference-server";
     license = lib.licenses.bsd3;
-    platforms = [ "x86_64-linux" "aarch64-linux" ];
+    platforms = [
+      "x86_64-linux"
+      "aarch64-linux"
+    ];
     mainProgram = "tritonserver";
   };
 }

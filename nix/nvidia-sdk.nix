@@ -1,10 +1,65 @@
-{ lib, stdenv, symlinkJoin, makeWrapper
-, versions, cuda, cudnn, nccl, tensorrt, cutlass, cutensor }:
+{
+  lib,
+  stdenv,
+  symlinkJoin,
+  makeWrapper,
+  patchelf,
+  file,
+  findutils,
+  gnugrep,
+  resholve,
+  bash,
+  coreutils,
+  versions,
+  cuda,
+  cudnn,
+  nccl,
+  tensorrt,
+  cutlass,
+  cutensor,
+  qt6,
+  mesa,
+  libglvnd,
+  xorg,
+  dbus,
+}:
 
 let
+  patchElfScript = resholve.mkDerivation {
+    pname = "patch-nvidia-elfs";
+    version = "1.0.0";
+
+    src = ./scripts;
+
+    installPhase = ''
+      mkdir -p $out/bin
+      cp patch-nvidia-elfs.sh $out/bin/patch-nvidia-elfs
+      chmod +x $out/bin/patch-nvidia-elfs
+    '';
+
+    solutions.default = {
+      scripts = [ "bin/patch-nvidia-elfs" ];
+      interpreter = "${bash}/bin/bash";
+      inputs = [ coreutils patchelf file findutils gnugrep ];
+      execer = [
+        "cannot:${patchelf}/bin/patchelf"
+        "cannot:${file}/bin/file"
+      ];
+    };
+  };
+
   merged = symlinkJoin {
-    name = "nvidia-sdk-${versions.cuda.version}-merged";
-    paths = [ cuda cudnn nccl tensorrt cutlass cutensor ];
+    name = "nvidia-sdk-${versions.cuda.version}";
+
+    paths = [
+      cuda
+      cudnn
+      nccl
+      tensorrt
+      cutlass
+      cutensor
+    ];
+
     postBuild = ''
       for dir in lib lib64 include; do
         if [ -L "$out/$dir" ]; then
@@ -17,32 +72,88 @@ let
     '';
   };
 
-in stdenv.mkDerivation {
+in
+stdenv.mkDerivation {
   pname = "nvidia-sdk";
   version = versions.cuda.version;
 
   dontUnpack = true;
-  nativeBuildInputs = [ makeWrapper ];
-  buildInputs = [ merged ];
+  nativeBuildInputs = [ makeWrapper patchelf file ];
+  buildInputs = [
+    merged
+    qt6.qtbase
+    qt6.qtwayland
+    mesa
+    libglvnd
+    xorg.libX11
+    xorg.libXext
+    xorg.libXrender
+    xorg.libxcb
+    stdenv.cc.cc.lib
+  ];
 
   installPhase = ''
     mkdir -p $out/{bin,lib64,include,nvvm,share,nix-support}
 
-    for dir in bin lib lib64 include nvvm share; do
+    # Copy bin, nvvm, share directories
+    for dir in bin nvvm share; do
       if [ -e "${merged}/$dir" ]; then
-        if [ -L "${merged}/$dir" ]; then
-          target=$(readlink -f "${merged}/$dir")
-          cp -rL "$target"/* "$out/$dir/" 2>/dev/null || true
-        else
-          cp -rL "${merged}/$dir"/* "$out/$dir/" 2>/dev/null || true
-        fi
+        cp -rL "${merged}/$dir"/* "$out/$dir/" 2>/dev/null || true
       fi
+    done
+
+    # Copy Nsight and profiling tools from CUDA
+    if [ -d "${cuda}/nsight-compute-2025.3.1" ]; then
+      cp -rL "${cuda}/nsight-compute-2025.3.1" "$out/" 2>/dev/null || true
+    fi
+    if [ -d "${cuda}/nsight-systems-2025.3.2" ]; then
+      cp -rL "${cuda}/nsight-systems-2025.3.2" "$out/" 2>/dev/null || true
+    fi
+    if [ -d "${cuda}/compute-sanitizer" ]; then
+      cp -rL "${cuda}/compute-sanitizer" "$out/" 2>/dev/null || true
+    fi
+    if [ -d "${cuda}/nsightee_plugins" ]; then
+      cp -rL "${cuda}/nsightee_plugins" "$out/" 2>/dev/null || true
+    fi
+
+    # Copy headers from all packages
+    for pkg in ${cuda} ${cudnn} ${nccl} ${tensorrt} ${cutlass} ${cutensor}; do
+      if [ -d "$pkg/include" ] && [ ! -L "$pkg/include" ]; then
+        cp -rL "$pkg/include"/* "$out/include/" 2>/dev/null || true
+      elif [ -L "$pkg/include" ]; then
+        target=$(readlink -f "$pkg/include")
+        [ -d "$target" ] && cp -rL "$target"/* "$out/include/" 2>/dev/null || true
+      fi
+
+      # Also copy target-specific headers from CUDA
+      if [ -d "$pkg/targets/x86_64-linux/include" ]; then
+        cp -rL "$pkg/targets/x86_64-linux/include"/* "$out/include/" 2>/dev/null || true
+      fi
+      if [ -d "$pkg/targets/aarch64-linux/include" ]; then
+        cp -rL "$pkg/targets/aarch64-linux/include"/* "$out/include/" 2>/dev/null || true
+      fi
+    done
+
+    # Merge all libraries from both lib and lib64 into $out/lib64
+    # This handles the different directory structures across packages
+    for pkg in ${cuda} ${cudnn} ${nccl} ${tensorrt} ${cutlass} ${cutensor}; do
+      for libdir in lib lib64; do
+        if [ -d "$pkg/$libdir" ] && [ ! -L "$pkg/$libdir" ]; then
+          cp -rL "$pkg/$libdir"/* "$out/lib64/" 2>/dev/null || true
+        elif [ -L "$pkg/$libdir" ]; then
+          target=$(readlink -f "$pkg/$libdir")
+          [ -d "$target" ] && cp -rL "$target"/* "$out/lib64/" 2>/dev/null || true
+        fi
+      done
     done
 
     [ ! -e "$out/lib" ] && ln -sf lib64 $out/lib
 
     mkdir -p $out/lib64/stubs
-    [ -d "${merged}/lib64/stubs" ] && cp -rL ${merged}/lib64/stubs/* $out/lib64/stubs/ 2>/dev/null || true
+
+    # Ensure pkgconfig directory is writable
+    chmod -R +w $out/lib64/pkgconfig 2>/dev/null || true
+    mkdir -p $out/lib64/pkgconfig
 
     cat > $out/nix-support/setup-hook << 'EOF'
     export CUDA_HOME="@out@"
@@ -50,12 +161,12 @@ in stdenv.mkDerivation {
     export CUDNN_HOME="@out@"
     export TENSORRT_HOME="@out@"
     export CUTLASS_PATH="@out@/include/cutlass"
-    export PATH="@out@/bin:$PATH"
-    export LD_LIBRARY_PATH="@out@/lib64:@out@/lib:$LD_LIBRARY_PATH"
-    export LIBRARY_PATH="@out@/lib64:@out@/lib:$LIBRARY_PATH"
-    export C_INCLUDE_PATH="@out@/include:$C_INCLUDE_PATH"
-    export CPLUS_INCLUDE_PATH="@out@/include:$CPLUS_INCLUDE_PATH"
-    export PKG_CONFIG_PATH="@out@/lib64/pkgconfig:$PKG_CONFIG_PATH"
+    export PATH="@out@/bin''${PATH:+:$PATH}"
+    export LD_LIBRARY_PATH="@out@/lib64:@out@/lib''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+    export LIBRARY_PATH="@out@/lib64:@out@/lib''${LIBRARY_PATH:+:$LIBRARY_PATH}"
+    export C_INCLUDE_PATH="@out@/include''${C_INCLUDE_PATH:+:$C_INCLUDE_PATH}"
+    export CPLUS_INCLUDE_PATH="@out@/include''${CPLUS_INCLUDE_PATH:+:$CPLUS_INCLUDE_PATH}"
+    export PKG_CONFIG_PATH="@out@/lib64/pkgconfig''${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
     EOF
     sed -i "s|@out@|$out|g" $out/nix-support/setup-hook
 
@@ -101,9 +212,40 @@ in stdenv.mkDerivation {
   '';
 
   dontStrip = true;
+  dontMoveLib64 = true;
+  dontWrapQtApps = true;
+
+  postFixup =
+    let
+      qtLibs = "${qt6.qtbase}/lib";
+      mesaLibs = "${mesa}/lib:${libglvnd}/lib";
+      x11Libs = "${xorg.libX11}/lib:${xorg.libXext}/lib:${xorg.libXrender}/lib:${xorg.libxcb}/lib";
+      sysLibs = "${stdenv.cc.cc.lib}/lib:${dbus}/lib";
+      nsightLibs = "$out/nsight-compute-2025.3.1/host/linux-desktop-glibc_2_11_3-x64:$out/nsight-systems-2025.3.2/host-linux-x64:$out/nsight-systems-2025.3.2/target-linux-x64";
+      dynamicLinker = "$(cat ${stdenv.cc}/nix-support/dynamic-linker)";
+    in
+    ''
+      ${patchElfScript}/bin/patch-nvidia-elfs \
+        "$out" \
+        "${qtLibs}" \
+        "${mesaLibs}" \
+        "${x11Libs}" \
+        "${sysLibs}" \
+        "${nsightLibs}" \
+        "${dynamicLinker}"
+    '';
 
   passthru = {
-    inherit versions cuda cudnn nccl tensorrt cutlass cutensor;
+    inherit
+      versions
+      cuda
+      cudnn
+      nccl
+      tensorrt
+      cutlass
+      cutensor
+      ;
+
     cudaVersion = versions.cuda.version;
     cudnnVersion = versions.cudnn.version;
   };
@@ -112,7 +254,12 @@ in stdenv.mkDerivation {
     description = "NVIDIA CUDA SDK ${versions.cuda.version}";
     homepage = "https://developer.nvidia.com/cuda-toolkit";
     license = lib.licenses.unfree;
-    platforms = [ "x86_64-linux" "aarch64-linux" ];
+
+    platforms = [
+      "x86_64-linux"
+      "aarch64-linux"
+    ];
+
     mainProgram = "nvcc";
   };
 }

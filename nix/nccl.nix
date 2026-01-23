@@ -1,26 +1,36 @@
-{ lib, stdenv, patchelf, file, versions, cuda, triton-container }:
+{ lib
+, stdenv
+, fetchurl
+, autoPatchelfHook
+, versions
+, cuda
+}:
 
 stdenv.mkDerivation {
   pname = "nccl";
   version = versions.nccl.version;
 
-  src = triton-container;
+  src = fetchurl {
+    url = versions.nccl.${stdenv.hostPlatform.system}.urls.mirror;
+    hash = versions.nccl.${stdenv.hostPlatform.system}.hash;
+  };
 
-  nativeBuildInputs = [ patchelf file ];
+  nativeBuildInputs = [ autoPatchelfHook ];
+  buildInputs = [ stdenv.cc.cc.lib cuda ];
 
+  sourceRoot = ".";
   dontConfigure = true;
   dontBuild = true;
 
   installPhase = ''
-    mkdir -p $out/{lib,include}
+    runHook preInstall
 
-    find $src/usr/lib $src/usr/local/lib $src/opt -name "libnccl*.so*" -type f 2>/dev/null | \
-      while read f; do cp -an "$f" $out/lib/ 2>/dev/null || true; done
-
-    find $src/usr/include $src/usr/local/include $src/opt -name "nccl*.h" -type f 2>/dev/null | \
-      while read f; do cp -an "$f" $out/include/ 2>/dev/null || true; done
-
+    mkdir -p $out
+    cp -a lib include $out/
     ln -sf lib $out/lib64
+
+    # Create unversioned symlink for linker
+    ln -sf libnccl.so.2 $out/lib/libnccl.so
 
     mkdir -p $out/lib/pkgconfig
     cat > $out/lib/pkgconfig/nccl.pc << EOF
@@ -34,14 +44,8 @@ stdenv.mkDerivation {
     Libs: -L\''${libdir} -lnccl
     Cflags: -I\''${includedir}
     EOF
-  '';
 
-  fixupPhase = ''
-    find $out -type f \( -executable -o -name "*.so*" \) 2>/dev/null | while read -r f; do
-      [ -L "$f" ] && continue
-      file "$f" | grep -q ELF || continue
-      patchelf --set-rpath "${cuda}/lib:${cuda}/lib64:$out/lib" "$f" 2>/dev/null || true
-    done
+    runHook postInstall
   '';
 
   passthru.version = versions.nccl.version;
