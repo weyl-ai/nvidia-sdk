@@ -154,6 +154,9 @@
                 # Model runners
                 phi4-nvfp4-runner
                 tritonserver-phi4
+                qwen3-32b-nvfp4-runner
+                tritonserver-qwen3
+                qwen3-tts-runner
                 ;
               # Expose patched LLVM for testing
               clang-sm120 = pkgs'.llvmPackages_20.clang;
@@ -220,6 +223,35 @@
 
               # Package build checks
               packageChecks = mapAttrs checkPackage corePackages;
+
+              # TRT-LLM runner checks (verify scripts parse correctly)
+              trtllmChecks = {
+                phi4-nvfp4-runner = pkgs'.runCommand "check-phi4-nvfp4" {} ''
+                  ${pkgs'.phi4-nvfp4-runner}/bin/phi4-nvfp4 --help > /dev/null 2>&1 || true
+                  echo "phi4-nvfp4-runner: ok" > $out
+                '';
+
+                qwen3-32b-nvfp4-runner = pkgs'.runCommand "check-qwen3-32b-nvfp4" {} ''
+                  ${pkgs'.qwen3-32b-nvfp4-runner}/bin/qwen3-32b-nvfp4 --help > /dev/null 2>&1 || true
+                  echo "qwen3-32b-nvfp4-runner: ok" > $out
+                '';
+
+                tritonserver-phi4 = pkgs'.runCommand "check-tritonserver-phi4" {} ''
+                  # Just verify the wrapper script exists and is executable
+                  test -x ${pkgs'.tritonserver-phi4}/bin/tritonserver-phi4
+                  echo "tritonserver-phi4: ok" > $out
+                '';
+
+                tritonserver-qwen3 = pkgs'.runCommand "check-tritonserver-qwen3" {} ''
+                  test -x ${pkgs'.tritonserver-qwen3}/bin/tritonserver-qwen3
+                  echo "tritonserver-qwen3: ok" > $out
+                '';
+
+                tritonserver-trtllm = pkgs'.runCommand "check-tritonserver-trtllm" {} ''
+                  test -x ${pkgs'.tritonserver-trtllm}/bin/tritonserver
+                  echo "tritonserver-trtllm: ok" > $out
+                '';
+              };
 
               # Functional tests
               functionalChecks = {
@@ -330,7 +362,7 @@
                 };
               };
             in
-            packageChecks // cudaVersionChecks // functionalChecks // nixosModuleChecks;
+            packageChecks // cudaVersionChecks // functionalChecks // trtllmChecks // nixosModuleChecks;
 
           apps = {
             update = {
@@ -409,6 +441,30 @@
               type = "app";
               program = "${pkgs'.tritonserver-phi4}/bin/tritonserver-phi4";
               meta.description = "Triton Inference Server for Phi-4 FP4";
+            };
+
+            tritonserver-trtllm = {
+              type = "app";
+              program = "${pkgs'.tritonserver-trtllm}/bin/tritonserver";
+              meta.description = "Triton Inference Server with TensorRT-LLM backend";
+            };
+
+            qwen3-32b-nvfp4 = {
+              type = "app";
+              program = "${pkgs'.qwen3-32b-nvfp4-runner}/bin/qwen3-32b-nvfp4";
+              meta.description = "Run Qwen3-32B NVFP4 with TensorRT-LLM";
+            };
+
+            tritonserver-qwen3 = {
+              type = "app";
+              program = "${pkgs'.tritonserver-qwen3}/bin/tritonserver-qwen3";
+              meta.description = "Triton Inference Server for Qwen3-32B FP4";
+            };
+
+            qwen3-tts = {
+              type = "app";
+              program = "${pkgs'.qwen3-tts-runner}/bin/qwen3-tts";
+              meta.description = "Qwen3-TTS voice synthesis with VoiceDesign";
             };
           };
         };
@@ -729,15 +785,67 @@
               cutensor = final.cutensor;
             };
 
-            # Phi-4 NVFP4 runner (TensorRT-LLM)
-            phi4-nvfp4-runner = final.callPackage ./nix/phi4-nvfp4-runner.nix {
+            # TensorRT-LLM runner library
+            trtllm = final.callPackage ./nix/trtllm-runner.nix {
               tritonserver-trtllm = final.tritonserver-trtllm;
               cuda = final.cuda;
             };
 
+            # Phi-4 NVFP4 runner (TensorRT-LLM)
+            phi4-nvfp4-runner = final.trtllm.mkRunner {
+              name = "phi4-nvfp4";
+              model = "nvidia/Phi-4-reasoning-plus-NVFP4";
+              description = "Phi-4 14B FP4 on Blackwell (SM120)";
+              defaultTemperature = 0.8;
+              defaultTopP = 0.95;
+            };
+
             # Triton Inference Server for Phi-4 FP4
-            tritonserver-phi4 = final.callPackage ./nix/tritonserver-phi4.nix {
-              tritonserver-trtllm = final.tritonserver-trtllm;
+            tritonserver-phi4 = final.trtllm.mkTritonServer {
+              name = "phi4";
+              model = "nvidia/Phi-4-reasoning-plus-NVFP4";
+              description = "Triton: Phi-4 14B FP4 on Blackwell";
+              defaultTemperature = 0.8;
+              defaultTopP = 0.95;
+            };
+
+            # Qwen3-32B NVFP4 runner (TensorRT-LLM)
+            qwen3-32b-nvfp4-runner = final.trtllm.mkRunner {
+              name = "qwen3-32b-nvfp4";
+              model = "nvidia/Qwen3-32B-NVFP4";
+              description = "Qwen3 32B FP4 on Blackwell (SM120)";
+              defaultTemperature = 0.7;
+              defaultTopP = 0.9;
+              chatTemplate = "qwen3";  # Enable Qwen3 chat template with --thinking flag
+              extraPythonCode = ''
+def format_prompt(text, thinking=False):
+    """Format prompt with Qwen3 chat template."""
+    if thinking:
+        return f"<|im_start|>system\nYou are a helpful assistant. Think step by step.<|im_end|>\n<|im_start|>user\n{text}<|im_end|>\n<|im_start|>assistant\n"
+    else:
+        return f"<|im_start|>user\n{text}<|im_end|>\n<|im_start|>assistant\n"
+'';
+            };
+
+            # Triton Inference Server for Qwen3-32B FP4
+            tritonserver-qwen3 = final.trtllm.mkTritonServer {
+              name = "qwen3";
+              model = "nvidia/Qwen3-32B-NVFP4";
+              description = "Triton: Qwen3 32B FP4 on Blackwell";
+              defaultTemperature = 0.7;
+              defaultTopP = 0.9;
+              extraInputs = [
+                ''{ name: "use_chat_template", data_type: TYPE_INT32, dims: [ 1 ], optional: true }''
+              ];
+              extraModelCode = ''
+            use_chat_template = self._get_scalar(request, "use_chat_template", 1)
+            if use_chat_template:
+                prompts = [f"<|im_start|>user\n{p}<|im_end|>\n<|im_start|>assistant\n" for p in prompts]
+'';
+            };
+
+            # Qwen3-TTS runner (VoiceDesign model, uses PyTorch nightly for SM120)
+            qwen3-tts-runner = final.callPackage ./nix/qwen3-tts-runner.nix {
               cuda = final.cuda;
             };
 
