@@ -157,6 +157,9 @@
                 qwen3-32b-nvfp4-runner
                 tritonserver-qwen3
                 qwen3-tts-runner
+                # OpenAI-compatible (OpenWebUI)
+                openai-phi4
+                openai-qwen3
                 ;
               # Expose patched LLVM for testing
               clang-sm120 = pkgs'.llvmPackages_20.clang;
@@ -250,6 +253,16 @@
                 tritonserver-trtllm = pkgs'.runCommand "check-tritonserver-trtllm" {} ''
                   test -x ${pkgs'.tritonserver-trtllm}/bin/tritonserver
                   echo "tritonserver-trtllm: ok" > $out
+                '';
+
+                openai-phi4 = pkgs'.runCommand "check-openai-phi4" {} ''
+                  test -x ${pkgs'.openai-phi4}/bin/openai-phi4
+                  echo "openai-phi4: ok" > $out
+                '';
+
+                openai-qwen3 = pkgs'.runCommand "check-openai-qwen3" {} ''
+                  test -x ${pkgs'.openai-qwen3}/bin/openai-qwen3
+                  echo "openai-qwen3: ok" > $out
                 '';
               };
 
@@ -465,6 +478,19 @@
               type = "app";
               program = "${pkgs'.qwen3-tts-runner}/bin/qwen3-tts";
               meta.description = "Qwen3-TTS voice synthesis with VoiceDesign";
+            };
+
+            # OpenAI-compatible servers (for OpenWebUI)
+            openai-phi4 = {
+              type = "app";
+              program = "${pkgs'.openai-phi4}/bin/openai-phi4";
+              meta.description = "OpenAI API: Phi-4 FP4 (streaming, OpenWebUI)";
+            };
+
+            openai-qwen3 = {
+              type = "app";
+              program = "${pkgs'.openai-qwen3}/bin/openai-qwen3";
+              meta.description = "OpenAI API: Qwen3-32B FP4 (streaming, OpenWebUI)";
             };
           };
         };
@@ -788,6 +814,7 @@
             # TensorRT-LLM runner library
             trtllm = final.callPackage ./nix/trtllm-runner.nix {
               tritonserver-trtllm = final.tritonserver-trtllm;
+              inherit triton-trtllm-container;
               cuda = final.cuda;
             };
 
@@ -842,6 +869,19 @@ def format_prompt(text, thinking=False):
             if use_chat_template:
                 prompts = [f"<|im_start|>user\n{p}<|im_end|>\n<|im_start|>assistant\n" for p in prompts]
 '';
+            };
+
+            # OpenAI-compatible servers (for OpenWebUI, streaming)
+            openai-phi4 = final.trtllm.mkOpenAIServer {
+              name = "phi4";
+              model = "nvidia/Phi-4-reasoning-plus-NVFP4";
+              description = "OpenAI API: Phi-4 14B FP4 (streaming, OpenWebUI)";
+            };
+
+            openai-qwen3 = final.trtllm.mkOpenAIServer {
+              name = "qwen3";
+              model = "nvidia/Qwen3-32B-NVFP4";
+              description = "OpenAI API: Qwen3 32B FP4 (streaming, OpenWebUI)";
             };
 
             # Qwen3-TTS runner (VoiceDesign model, uses PyTorch nightly for SM120)
