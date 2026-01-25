@@ -440,7 +440,7 @@ in
 
       serviceConfig = {
         Type = "forking";
-        ExecStart = "${pkgs.prrte}/bin/prte --daemonize --system-server";
+        ExecStart = "${pkgs.prrte}/bin/prte --daemonize --system-server --allow-run-as-root";
         ExecStop = "${pkgs.prrte}/bin/pterm";
         Restart = "on-failure";
         RestartSec = "5s";
