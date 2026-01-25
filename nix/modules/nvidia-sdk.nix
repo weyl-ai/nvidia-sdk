@@ -363,10 +363,16 @@ in
       lib.optionals cfg.systemPackages [ cudaPackage ]
       ++ lib.optionals cfg.mpi.enable [ pkgs.openmpi pkgs.prrte ];
 
-    environment.variables = lib.mkIf (cfg.systemPackages && cfg.environmentVariables) {
-      CUDA_PATH = "${cudaPackage}";
-      CUDA_HOME = "${cudaPackage}";
-    };
+    environment.variables = lib.mkMerge [
+      (lib.mkIf (cfg.systemPackages && cfg.environmentVariables) {
+        CUDA_PATH = "${cudaPackage}";
+        CUDA_HOME = "${cudaPackage}";
+      })
+      (lib.mkIf cfg.mpi.enable {
+        PRTE_MCA_prte_system_server_uri = "file:/run/prte/uri";
+        PMIX_SYSTEM_TMPDIR = "/run/prte/tmp";
+      })
+    ];
 
     # ──────────────────────────────────────────────────────────────────────────
     # FHS Compatibility (/usr/lib/cuda)
@@ -461,12 +467,6 @@ in
         # Set PRTE tmpdir
         PRTE_MCA_prte_tmpdir_base = "/run/prte/tmp";
       };
-    };
-
-    # Environment variables for all users to connect to PRTE DVM
-    environment.variables = lib.mkIf cfg.mpi.enable {
-      PRTE_MCA_prte_system_server_uri = "file:/run/prte/uri";
-      PMIX_SYSTEM_TMPDIR = "/run/prte/tmp";
     };
 
     # ──────────────────────────────────────────────────────────────────────────
