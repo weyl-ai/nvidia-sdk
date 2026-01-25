@@ -151,27 +151,21 @@
                 btop-nvml
                 monitoring-tools
 
-                # TRT-LLM Python environment
+                # TRT-LLM Python environment (for manual engine building)
                 trtllm-python
                 trtllm-build
                 trtllm-env
 
-                # Model runners
-                phi4-nvfp4-runner
-                tritonserver-phi4
-                qwen3-32b-nvfp4-runner
-                tritonserver-qwen3
+                # Model runners (native tensorrtllm backend)
                 qwen3-tts-runner
-                # OpenAI-compatible (OpenWebUI)
-                openai-phi4
-                openai-qwen3
 
-                # Native TRT-LLM engines (C++ backend, impure builds)
+                # TRT-LLM engines (C++ backend, impure builds)
                 # Build with: nix build .#qwen3-32b-engine --option sandbox false
                 qwen3-32b-engine
                 qwen3-32b-triton-repo
                 qwen3-32b-hf-model
-                tritonserver-qwen3-native
+                tritonserver-qwen3
+                openai-qwen3
                 ;
               # Expose patched LLVM for testing
               clang-sm120 = pkgs'.llvmPackages_20.clang;
@@ -249,42 +243,11 @@
               # Package build checks
               packageChecks = mapAttrs checkPackage corePackages;
 
-              # TRT-LLM runner checks (verify scripts parse correctly)
+              # TRT-LLM checks
               trtllmChecks = {
-                phi4-nvfp4-runner = pkgs'.runCommand "check-phi4-nvfp4" {} ''
-                  ${pkgs'.phi4-nvfp4-runner}/bin/phi4-nvfp4 --help > /dev/null 2>&1 || true
-                  echo "phi4-nvfp4-runner: ok" > $out
-                '';
-
-                qwen3-32b-nvfp4-runner = pkgs'.runCommand "check-qwen3-32b-nvfp4" {} ''
-                  ${pkgs'.qwen3-32b-nvfp4-runner}/bin/qwen3-32b-nvfp4 --help > /dev/null 2>&1 || true
-                  echo "qwen3-32b-nvfp4-runner: ok" > $out
-                '';
-
-                tritonserver-phi4 = pkgs'.runCommand "check-tritonserver-phi4" {} ''
-                  # Just verify the wrapper script exists and is executable
-                  test -x ${pkgs'.tritonserver-phi4}/bin/tritonserver-phi4
-                  echo "tritonserver-phi4: ok" > $out
-                '';
-
-                tritonserver-qwen3 = pkgs'.runCommand "check-tritonserver-qwen3" {} ''
-                  test -x ${pkgs'.tritonserver-qwen3}/bin/tritonserver-qwen3
-                  echo "tritonserver-qwen3: ok" > $out
-                '';
-
                 tritonserver-trtllm = pkgs'.runCommand "check-tritonserver-trtllm" {} ''
                   test -x ${pkgs'.tritonserver-trtllm}/bin/tritonserver
                   echo "tritonserver-trtllm: ok" > $out
-                '';
-
-                openai-phi4 = pkgs'.runCommand "check-openai-phi4" {} ''
-                  test -x ${pkgs'.openai-phi4}/bin/openai-phi4
-                  echo "openai-phi4: ok" > $out
-                '';
-
-                openai-qwen3 = pkgs'.runCommand "check-openai-qwen3" {} ''
-                  test -x ${pkgs'.openai-qwen3}/bin/openai-qwen3
-                  echo "openai-qwen3: ok" > $out
                 '';
               };
 
@@ -479,34 +442,10 @@
               meta.description = "TensorRT-LLM engine builder";
             };
 
-            phi4-nvfp4 = {
-              type = "app";
-              program = "${pkgs'.phi4-nvfp4-runner}/bin/phi4-nvfp4";
-              meta.description = "Run Phi-4 NVFP4 with TensorRT-LLM";
-            };
-
-            tritonserver-phi4 = {
-              type = "app";
-              program = "${pkgs'.tritonserver-phi4}/bin/tritonserver-phi4";
-              meta.description = "Triton Inference Server for Phi-4 FP4";
-            };
-
             tritonserver-trtllm = {
               type = "app";
               program = "${pkgs'.tritonserver-trtllm}/bin/tritonserver";
               meta.description = "Triton Inference Server with TensorRT-LLM backend";
-            };
-
-            qwen3-32b-nvfp4 = {
-              type = "app";
-              program = "${pkgs'.qwen3-32b-nvfp4-runner}/bin/qwen3-32b-nvfp4";
-              meta.description = "Run Qwen3-32B NVFP4 with TensorRT-LLM";
-            };
-
-            tritonserver-qwen3 = {
-              type = "app";
-              program = "${pkgs'.tritonserver-qwen3}/bin/tritonserver-qwen3";
-              meta.description = "Triton Inference Server for Qwen3-32B FP4";
             };
 
             qwen3-tts = {
@@ -515,25 +454,18 @@
               meta.description = "Qwen3-TTS voice synthesis with VoiceDesign";
             };
 
-            # OpenAI-compatible servers (for OpenWebUI)
-            openai-phi4 = {
+            # Qwen3-32B with native tensorrtllm backend (pre-built engine)
+            tritonserver-qwen3 = {
               type = "app";
-              program = "${pkgs'.openai-phi4}/bin/openai-phi4";
-              meta.description = "OpenAI API: Phi-4 FP4 (streaming, OpenWebUI)";
+              program = "${pkgs'.tritonserver-qwen3}/bin/tritonserver-qwen3";
+              meta.description = "Triton: Qwen3-32B native C++ backend";
             };
 
             openai-qwen3 = {
               type = "app";
               program = "${pkgs'.openai-qwen3}/bin/openai-qwen3";
-              meta.description = "OpenAI API: Qwen3-32B FP4 (streaming, OpenWebUI)";
+              meta.description = "OpenAI API: Qwen3-32B (streaming, OpenWebUI)";
             };
-
-            # Native TRT-LLM engine apps (require impure build first)
-            # tritonserver-qwen3-native = {
-            #   type = "app";
-            #   program = "${pkgs'.tritonserver-qwen3-native}/bin/tritonserver-qwen3-native";
-            #   meta.description = "Triton: Qwen3-32B native C++ backend (pre-built engine)";
-            # };
           };
         };
 
@@ -853,13 +785,6 @@
               cutensor = final.cutensor;
             };
 
-            # TensorRT-LLM runner library (Python API - runtime engine build)
-            trtllm = final.callPackage ./nix/trtllm-runner.nix {
-              tritonserver-trtllm = final.tritonserver-trtllm;
-              inherit triton-trtllm-container;
-              cuda = final.cuda;
-            };
-
             # Python with TensorRT-LLM environment
             # Usage: nix run .#python -- -c "from tensorrt_llm import LLM; print('ok')"
             # Or:    nix shell .#python -c "trtllm-build --help"
@@ -890,96 +815,24 @@
               ];
             };
 
-            # TensorRT-LLM engine builder (C++ native - build-time engine)
-            trtllm-engine = final.callPackage ./nix/trtllm-engine.nix {
-              tritonserver-trtllm = final.tritonserver-trtllm;
-              cuda = final.cuda;
-            };
-
-            # Phi-4 NVFP4 runner (TensorRT-LLM)
-            phi4-nvfp4-runner = final.trtllm.mkRunner {
-              name = "phi4-nvfp4";
-              model = "nvidia/Phi-4-reasoning-plus-NVFP4";
-              description = "Phi-4 14B FP4 on Blackwell (SM120)";
-              defaultTemperature = 0.8;
-              defaultTopP = 0.95;
-            };
-
-            # Triton Inference Server for Phi-4 FP4
-            tritonserver-phi4 = final.trtllm.mkTritonServer {
-              name = "phi4";
-              model = "nvidia/Phi-4-reasoning-plus-NVFP4";
-              description = "Triton: Phi-4 14B FP4 on Blackwell";
-              defaultTemperature = 0.8;
-              defaultTopP = 0.95;
-            };
-
-            # Qwen3-32B NVFP4 runner (TensorRT-LLM)
-            qwen3-32b-nvfp4-runner = final.trtllm.mkRunner {
-              name = "qwen3-32b-nvfp4";
-              model = "nvidia/Qwen3-32B-NVFP4";
-              description = "Qwen3 32B FP4 on Blackwell (SM120)";
-              defaultTemperature = 0.7;
-              defaultTopP = 0.9;
-              chatTemplate = "qwen3";  # Enable Qwen3 chat template with --thinking flag
-              extraPythonCode = ''
-def format_prompt(text, thinking=False):
-    """Format prompt with Qwen3 chat template."""
-    if thinking:
-        return f"<|im_start|>system\nYou are a helpful assistant. Think step by step.<|im_end|>\n<|im_start|>user\n{text}<|im_end|>\n<|im_start|>assistant\n"
-    else:
-        return f"<|im_start|>user\n{text}<|im_end|>\n<|im_start|>assistant\n"
-'';
-            };
-
-            # Triton Inference Server for Qwen3-32B FP4
-            tritonserver-qwen3 = final.trtllm.mkTritonServer {
-              name = "qwen3";
-              model = "nvidia/Qwen3-32B-NVFP4";
-              description = "Triton: Qwen3 32B FP4 on Blackwell";
-              defaultTemperature = 0.7;
-              defaultTopP = 0.9;
-              extraInputs = [
-                ''{ name: "use_chat_template", data_type: TYPE_INT32, dims: [ 1 ], optional: true }''
-              ];
-              extraModelCode = ''
-            use_chat_template = self._get_scalar(request, "use_chat_template", 1)
-            if use_chat_template:
-                prompts = [f"<|im_start|>user\n{p}<|im_end|>\n<|im_start|>assistant\n" for p in prompts]
-'';
-            };
-
-            # OpenAI-compatible servers (for OpenWebUI, streaming)
-            openai-phi4 = final.trtllm.mkOpenAIServer {
-              name = "phi4";
-              model = "nvidia/Phi-4-reasoning-plus-NVFP4";
-              description = "OpenAI API: Phi-4 14B FP4 (streaming, OpenWebUI)";
-            };
-
-            openai-qwen3 = final.trtllm.mkOpenAIServer {
-              name = "qwen3";
-              model = "nvidia/Qwen3-32B-NVFP4";
-              description = "OpenAI API: Qwen3 32B FP4 (streaming, OpenWebUI)";
-              # Use alternate ports to avoid conflict with existing Triton on 8000
-              httpPort = 8100;
-              grpcPort = 8101;
-              metricsPort = 8102;
-              openaiPort = 9100;
-            };
-
             # Qwen3-TTS runner (VoiceDesign model, uses PyTorch nightly for SM120)
             qwen3-tts-runner = final.callPackage ./nix/qwen3-tts-runner.nix {
               cuda = final.cuda;
             };
 
             # ══════════════════════════════════════════════════════════════════════
-            # Native TensorRT-LLM Engines (C++ backend, build-time engine compilation)
+            # TensorRT-LLM Engines (native tensorrtllm backend)
             # ══════════════════════════════════════════════════════════════════════
-            # NOTE: These are IMPURE builds that require GPU access (__noChroot = true)
-            # Build with: nix build .#qwen3-32b-engine --option sandbox false
+            # Build engines with: nix build .#qwen3-32b-engine --option sandbox false
+            # Run server with:    nix run .#tritonserver-qwen3
+            # OpenAI proxy:       nix run .#openai-qwen3
 
-            # Qwen3-32B-NVFP4 TensorRT engine (pre-built)
-            # Uses the locally downloaded HF model to avoid network access during build
+            trtllm-engine = final.callPackage ./nix/trtllm-engine.nix {
+              tritonserver-trtllm = final.tritonserver-trtllm;
+              cuda = final.cuda;
+            };
+
+            # Qwen3-32B-NVFP4 TensorRT engine
             qwen3-32b-engine = final.trtllm-engine.mkEngine {
               name = "qwen3-32b-nvfp4";
               hfModel = final.qwen3-32b-hf-model;
@@ -1010,13 +863,22 @@ def format_prompt(text, thinking=False):
               hash = "sha256-Uekvo4NlzbrbZcKPSyzd7opvZDh+JOE55jrUbcsMu8Q=";
             };
 
-            # Triton server wrapper for native Qwen3 engine
-            tritonserver-qwen3-native = final.trtllm-engine.mkTritonServer {
-              name = "qwen3-native";
+            # Triton server for Qwen3-32B (native tensorrtllm backend)
+            tritonserver-qwen3 = final.trtllm-engine.mkTritonServer {
+              name = "qwen3";
               repo = final.qwen3-32b-triton-repo;
               httpPort = 8000;
               grpcPort = 8001;
               metricsPort = 8002;
+            };
+
+            # OpenAI-compatible proxy for Qwen3-32B (streaming, OpenWebUI)
+            openai-qwen3 = final.callPackage ./nix/openai-proxy.nix {
+              tritonserver-trtllm = final.tritonserver-trtllm;
+              tokenizer = final.qwen3-32b-hf-model;
+              modelName = "qwen3";
+              tritonGrpcPort = 8001;
+              openaiPort = 9000;
             };
 
             # Example packages to demonstrate SDK functionality
