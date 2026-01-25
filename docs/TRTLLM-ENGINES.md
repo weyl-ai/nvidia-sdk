@@ -145,6 +145,63 @@ curl http://localhost:9000/v1/chat/completions \
   -d '{"model":"qwen3","messages":[{"role":"user","content":"Hello"}],"stream":true}'
 ```
 
+## Multi-GPU (Tensor Parallelism)
+
+For multi-GPU inference, build with `tensorParallelSize > 1`:
+
+```bash
+# Build 4-GPU engine (~20 minutes)
+nix build .#qwen3-32b-engine-tp4 --option sandbox false
+
+# Link and run
+ln -sf /nix/store/<hash>-trtllm-engine-qwen3-32b-nvfp4-tp4-1.0.0 ~/.cache/trtllm-engines/qwen3-tp4
+nix run .#tritonserver-qwen3-tp4
+```
+
+### How Multi-GPU Build Works
+
+Single-GPU and multi-GPU use different build strategies:
+
+**Single GPU** (`tensorParallelSize = 1`):
+- Uses `trtllm-bench build` (simpler, one command)
+- Timeout kills MPI hang after engine is saved
+
+**Multi-GPU** (`tensorParallelSize > 1`):
+- Downloads model from HuggingFace
+- Converts to TRT-LLM checkpoint format for each rank
+- Builds engine with `trtllm-build --workers N`
+
+### Multi-GPU Engine Files
+
+```
+/nix/store/<hash>-trtllm-engine-qwen3-32b-nvfp4-tp4-1.0.0/
+├── config.json
+├── rank0.engine      # ~5GB per GPU (model sharded)
+├── rank1.engine
+├── rank2.engine
+├── rank3.engine
+├── tokenizer.json
+└── ...
+```
+
+### Available Multi-GPU Engines
+
+| Package | GPUs | Batch | Context |
+|---------|------|-------|---------|
+| `qwen3-32b-engine` | 1 | 8 | 16K |
+| `qwen3-32b-engine-tp2` | 2 | 16 | 24K |
+| `qwen3-32b-engine-tp4` | 4 | 32 | 32K |
+
+### NCCL Configuration
+
+For PCIe topology (no NVLink), these NCCL settings are applied:
+
+```bash
+NCCL_IB_DISABLE=1          # No InfiniBand
+NCCL_P2P_LEVEL=PHB         # PCIe peer-to-peer via host bridge
+NCCL_SHM_DISABLE=0         # Enable shared memory
+```
+
 ## Adding New Models
 
 1. Add to `flake.nix`:
@@ -154,11 +211,13 @@ my-model-engine = engines.mkEngine {
   name = "my-model";
   hfModel = "nvidia/My-Model-NVFP4";
   quantization = "NVFP4";
+  tensorParallelSize = 1;  # or 2, 4 for multi-GPU
 };
 
 tritonserver-my-model = engines.mkTritonServerRuntime {
   name = "my-model";
   tokenizerModel = "nvidia/My-Model-NVFP4";
+  worldSize = 1;  # must match tensorParallelSize
 };
 ```
 
