@@ -7,6 +7,7 @@
   file,
   patchelf,
   makeWrapper,
+  unzip,
   python312,
   abseil-cpp,
   acl,
@@ -75,6 +76,18 @@
 
 let
   python = python312;
+
+  # tritonclient wheel for GRPC streaming support
+  tritonclient-wheel = fetchurl {
+    url = "https://files.pythonhosted.org/packages/py3/t/tritonclient/tritonclient-2.64.0-py3-none-manylinux1_x86_64.whl";
+    hash = "sha256-TRZTZYulmzgLcylp5nhCssk1sUer0eiUWP1kqTNbH8c=";
+  };
+
+  # python-rapidjson (tritonclient dependency)
+  rapidjson-wheel = fetchurl {
+    url = "https://files.pythonhosted.org/packages/cp312/p/python_rapidjson/python_rapidjson-1.23-cp312-cp312-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl";
+    hash = "sha256-YGeBDw/VdxPsczsLauJl7xaeE7LOBKSTixgHzd2LTbQ=";
+  };
 
   # Use system libxml2 directly
 
@@ -158,6 +171,7 @@ stdenv.mkDerivation {
     file
     patchelf
     makeWrapper
+    unzip
   ];
   buildInputs = runtime-inputs;
 
@@ -284,6 +298,14 @@ stdenv.mkDerivation {
     do
       [ -d "$pydir" ] && cp -a "$pydir"/* $out/python/ 2>/dev/null || true
     done
+
+    # Install tritonclient for GRPC streaming
+    unzip -o ${tritonclient-wheel} -d $TMPDIR/tc
+    cp -a $TMPDIR/tc/tritonclient-*.data/purelib/* $out/python/
+
+    # Install python-rapidjson (tritonclient dependency)
+    unzip -o ${rapidjson-wheel} -d $TMPDIR/rj
+    cp -a $TMPDIR/rj/rapidjson* $out/python/
 
     # NCCL from Nix
     if [ -d ${nccl}/lib ]; then

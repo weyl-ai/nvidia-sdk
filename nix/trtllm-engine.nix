@@ -60,6 +60,12 @@ let
     export HF_HOME="$TMPDIR/hf_cache"
     export TLLM_LOG_LEVEL="WARNING"
     mkdir -p "$HOME" "$HF_HOME"
+    
+    # NCCL configuration for multi-GPU (PCIe topology)
+    export NCCL_DEBUG=INFO
+    export NCCL_IB_DISABLE=1          # No InfiniBand on this system
+    export NCCL_P2P_LEVEL=PHB         # PCIe peer-to-peer via host bridge
+    export NCCL_SHM_DISABLE=0         # Enable shared memory
   '';
 
 in
@@ -122,6 +128,11 @@ rec {
       maxSeqLen ? 16384,
       maxNumTokens ? 8192,
     }:
+    let
+      worldSize = tensorParallelSize * pipelineParallelSize;
+      # Generate CUDA_VISIBLE_DEVICES string: "0" for 1 GPU, "0,1,2,3" for 4 GPUs
+      cudaDevices = lib.concatStringsSep "," (map toString (lib.range 0 (worldSize - 1)));
+    in
     stdenv.mkDerivation {
       pname = "trtllm-engine-${name}";
       version = "1.0.0";
@@ -132,15 +143,24 @@ rec {
 
       buildCommand = ''
         ${envSetup}
-        export CUDA_VISIBLE_DEVICES=0
+        export CUDA_VISIBLE_DEVICES="${cudaDevices}"
 
         mkdir -p "$out"
 
-        # trtllm-bench build hangs during MPI shutdown after engine is saved.
-        # We use timeout to kill it after engine files appear, then copy them.
-        # The engine is saved to $TMPDIR/tmp*-llm-workspace/tmp.engine/
-        
-        timeout 600 mpirun -np 1 --allow-run-as-root \
+        echo "════════════════════════════════════════════════════════════════"
+        echo "Building TensorRT-LLM engine: ${name}"
+        echo "════════════════════════════════════════════════════════════════"
+        echo "Model: ${hfModel}"
+        echo "Quantization: ${if quantization != null then quantization else "none"}"
+        echo "Tensor Parallel: ${toString tensorParallelSize}"
+        echo "Pipeline Parallel: ${toString pipelineParallelSize}"
+        echo "World Size: ${toString worldSize}"
+        echo "CUDA Devices: ${cudaDevices}"
+        echo ""
+
+        ${if worldSize == 1 then ''
+        # Single GPU: use trtllm-bench build (simpler, handles MPI hang with timeout)
+        timeout 900 mpirun -np 1 --allow-run-as-root \
           -x LD_LIBRARY_PATH -x PYTHONPATH -x CUDA_VISIBLE_DEVICES -x HOME -x HF_HOME \
           ${python}/bin/python -m tensorrt_llm.commands.bench \
             --model ${hfModel} \
@@ -150,27 +170,135 @@ rec {
             --max_batch_size ${toString maxBatchSize} \
             --max_num_tokens ${toString maxNumTokens} \
             --max_seq_len ${toString maxSeqLen} \
-            --tp_size ${toString tensorParallelSize} \
-            --pp_size ${toString pipelineParallelSize} \
+            --tp_size 1 \
+            --pp_size 1 \
             --trust_remote_code True || true
 
-        # Find and copy the engine (in tmp*-llm-workspace/tmp.engine/)
         ENGINE_DIR=$(find "$TMPDIR" -type d -name "tmp.engine" 2>/dev/null | head -1)
+        '' else ''
+        # Multi-GPU: use trtllm-build with checkpoint conversion
+        # The LLM API doesn't work properly for multi-GPU engine building due to MPI issues.
+        # Instead, we use the two-step approach:
+        # 1. Download HF model
+        # 2. Convert HF model to TRT-LLM checkpoint format
+        # 3. Build engine with trtllm-build
+        
+        MODEL_DIR="$TMPDIR/model"
+        CHECKPOINT_DIR="$TMPDIR/checkpoint"
+        ENGINE_DIR="$TMPDIR/engine"
+        mkdir -p "$MODEL_DIR" "$CHECKPOINT_DIR" "$ENGINE_DIR"
+        export MODEL_DIR CHECKPOINT_DIR ENGINE_DIR
+        
+        echo "Step 1: Downloading HuggingFace model..."
+        
+        ${python}/bin/python << 'PYTHON_DOWNLOAD'
+import os
+from huggingface_hub import snapshot_download
+
+model_dir = os.environ['MODEL_DIR']
+model_id = "${hfModel}"
+
+print(f"Downloading {model_id} to {model_dir}...")
+local_dir = snapshot_download(model_id, local_dir=model_dir)
+print(f"Model downloaded to: {local_dir}")
+print("Files:", os.listdir(local_dir))
+PYTHON_DOWNLOAD
+
+        echo "Step 2: Converting model to TRT-LLM checkpoint..."
+        
+        ${python}/bin/python << 'PYTHON_CONVERT'
+import os
+import sys
+
+os.environ['CUDA_VISIBLE_DEVICES'] = '${cudaDevices}'
+
+from tensorrt_llm.models import QWenForCausalLM
+from tensorrt_llm.mapping import Mapping
+
+model_dir = os.environ['MODEL_DIR']
+checkpoint_dir = os.environ['CHECKPOINT_DIR']
+tp_size = ${toString tensorParallelSize}
+pp_size = ${toString pipelineParallelSize}
+world_size = tp_size * pp_size
+
+print(f"Converting model from: {model_dir}")
+print(f"  TP: {tp_size}, PP: {pp_size}, World: {world_size}")
+sys.stdout.flush()
+
+# Create mapping
+mapping = Mapping(
+    world_size=world_size,
+    rank=0,
+    tp_size=tp_size,
+    pp_size=pp_size,
+)
+
+# Load from local directory and save checkpoint
+model = QWenForCausalLM.from_hugging_face(
+    model_dir,
+    dtype="auto",  # Keep original dtype (NVFP4)
+    mapping=mapping,
+    trust_remote_code=True,
+)
+
+print(f"Saving checkpoint to {checkpoint_dir}...")
+sys.stdout.flush()
+model.save_checkpoint(checkpoint_dir)
+print("Checkpoint saved!")
+print("Files:", os.listdir(checkpoint_dir))
+sys.stdout.flush()
+PYTHON_CONVERT
+
+        echo "Step 3: Building TensorRT engine..."
+        
+        # Build engine using trtllm-build (handles multi-rank properly)
+        ${python}/bin/python -m tensorrt_llm.commands.build \
+          --checkpoint_dir "$CHECKPOINT_DIR" \
+          --output_dir "$ENGINE_DIR" \
+          --gemm_plugin auto \
+          --max_batch_size ${toString maxBatchSize} \
+          --max_seq_len ${toString maxSeqLen} \
+          --max_num_tokens ${toString maxNumTokens} \
+          --workers ${toString worldSize} \
+          --paged_kv_cache enable \
+          --use_paged_context_fmha enable
+        
+        # Copy tokenizer files from downloaded model
+        echo "Copying tokenizer files..."
+        cp "$MODEL_DIR"/*.json "$ENGINE_DIR/" 2>/dev/null || true
+        cp "$MODEL_DIR"/tokenizer* "$ENGINE_DIR/" 2>/dev/null || true
+        cp "$MODEL_DIR"/vocab* "$ENGINE_DIR/" 2>/dev/null || true
+        cp "$MODEL_DIR"/merges* "$ENGINE_DIR/" 2>/dev/null || true
+        cp "$MODEL_DIR"/*.jinja "$ENGINE_DIR/" 2>/dev/null || true
+        ''}
+
         if [[ -z "$ENGINE_DIR" ]] || [[ ! -f "$ENGINE_DIR/rank0.engine" ]]; then
-          echo "ERROR: Engine not found in $TMPDIR"
-          find "$TMPDIR" -name "*.engine" -o -name "config.json" 2>/dev/null
+          echo "ERROR: Engine not found"
+          find "$TMPDIR" -name "*.engine" -o -name "config.json" 2>/dev/null || true
           exit 1
         fi
         
         echo "Found engine at: $ENGINE_DIR"
         cp -r "$ENGINE_DIR"/* "$out/"
         
-        # Verify
+        # Verify all rank engines exist for multi-GPU
+        echo ""
+        echo "Engine files:"
         ls -la "$out/"
-        test -f "$out/rank0.engine" || (echo "ERROR: rank0.engine not found" && exit 1)
+        
+        for rank in $(seq 0 $((${toString worldSize} - 1))); do
+          if [[ ! -f "$out/rank$rank.engine" ]]; then
+            echo "ERROR: rank$rank.engine not found"
+            exit 1
+          fi
+          echo "  rank$rank.engine: $(du -h "$out/rank$rank.engine" | cut -f1)"
+        done
+        
+        echo ""
+        echo "Engine build complete: ${toString worldSize} rank(s)"
       '';
 
-      meta.description = "TensorRT-LLM engine for ${name}";
+      meta.description = "TensorRT-LLM engine for ${name} (TP=${toString tensorParallelSize}, PP=${toString pipelineParallelSize})";
     };
 
   # ============================================================================
@@ -656,7 +784,21 @@ PBTXT
         export LD_LIBRARY_PATH="/run/opengl-driver/lib:${triton}/lib:${triton}/tensorrt_llm/lib:${cuda}/lib64:${openmpi}/lib''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 
         ${if worldSize > 1 then ''
+        # NCCL configuration for multi-GPU (PCIe topology)
+        export NCCL_DEBUG=''${NCCL_DEBUG:-WARN}
+        export NCCL_IB_DISABLE=1          # No InfiniBand
+        export NCCL_P2P_LEVEL=PHB         # PCIe peer-to-peer via host bridge
+        export NCCL_SHM_DISABLE=0         # Enable shared memory
+        
+        # Set CUDA devices for all GPUs
+        export CUDA_VISIBLE_DEVICES=''${CUDA_VISIBLE_DEVICES:-$(seq -s, 0 $((${toString worldSize} - 1)))}
+        
+        echo "Multi-GPU mode: ${toString worldSize} GPUs"
+        echo "CUDA_VISIBLE_DEVICES: $CUDA_VISIBLE_DEVICES"
+        echo ""
+        
         exec mpirun -np ${toString worldSize} --allow-run-as-root \
+          -x LD_LIBRARY_PATH -x NCCL_DEBUG -x NCCL_IB_DISABLE -x NCCL_P2P_LEVEL -x NCCL_SHM_DISABLE -x CUDA_VISIBLE_DEVICES \
           ${triton}/bin/tritonserver \
             --model-repository="$MODEL_REPO" \
             --http-port=${toString httpPort} \
@@ -673,7 +815,7 @@ PBTXT
         ''}
       '';
       meta = {
-        description = "Triton Inference Server for ${name} with full ensemble (runtime config)";
+        description = "Triton Inference Server for ${name} with full ensemble (runtime config, worldSize=${toString worldSize})";
         mainProgram = "tritonserver-${name}";
       };
     };

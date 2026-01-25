@@ -161,10 +161,14 @@
 
                 # TRT-LLM engines (C++ backend, impure builds)
                 # Build with: nix build .#qwen3-32b-engine --option sandbox false
-                qwen3-32b-engine
+                qwen3-32b-engine          # Single GPU
+                qwen3-32b-engine-tp2      # 2-GPU tensor parallel
+                qwen3-32b-engine-tp4      # 4-GPU tensor parallel
                 qwen3-32b-triton-repo
                 qwen3-32b-hf-model
-                tritonserver-qwen3
+                tritonserver-qwen3        # Single GPU server
+                tritonserver-qwen3-tp2    # 2-GPU server
+                tritonserver-qwen3-tp4    # 4-GPU server
                 openai-qwen3
                 ;
               # Expose patched LLVM for testing
@@ -832,16 +836,41 @@
               cuda = final.cuda;
             };
 
-            # Qwen3-32B-NVFP4 TensorRT engine
+            # Qwen3-32B-NVFP4 TensorRT engine (single GPU)
             # Build with: nix build .#qwen3-32b-engine --option sandbox false
             qwen3-32b-engine = final.trtllm-engine.mkEngine {
               name = "qwen3-32b-nvfp4";
               hfModel = "nvidia/Qwen3-32B-NVFP4";
-              quantization = "NVFP4";  # Pre-quantized NVFP4 model
+              quantization = "NVFP4";
               maxBatchSize = 8;
               maxSeqLen = 16384;
               maxNumTokens = 8192;
               tensorParallelSize = 1;
+            };
+
+            # Qwen3-32B-NVFP4 TensorRT engine (4-GPU tensor parallel)
+            # Build with: nix build .#qwen3-32b-engine-tp4 --option sandbox false
+            # Requires 4 GPUs during build and inference
+            qwen3-32b-engine-tp4 = final.trtllm-engine.mkEngine {
+              name = "qwen3-32b-nvfp4-tp4";
+              hfModel = "nvidia/Qwen3-32B-NVFP4";
+              quantization = "NVFP4";
+              maxBatchSize = 32;      # Higher batch size with 4x GPU memory
+              maxSeqLen = 32768;      # Longer context with sharded KV cache
+              maxNumTokens = 16384;
+              tensorParallelSize = 4;
+            };
+
+            # Qwen3-32B-NVFP4 TensorRT engine (2-GPU tensor parallel)
+            # Build with: nix build .#qwen3-32b-engine-tp2 --option sandbox false
+            qwen3-32b-engine-tp2 = final.trtllm-engine.mkEngine {
+              name = "qwen3-32b-nvfp4-tp2";
+              hfModel = "nvidia/Qwen3-32B-NVFP4";
+              quantization = "NVFP4";
+              maxBatchSize = 16;
+              maxSeqLen = 24576;
+              maxNumTokens = 12288;
+              tensorParallelSize = 2;
             };
 
             # Qwen3-32B Triton model repository (native tensorrtllm backend)
@@ -871,6 +900,27 @@
               httpPort = 8000;
               grpcPort = 8001;
               metricsPort = 8002;
+            };
+
+            # Triton server for Qwen3-32B 4-GPU (requires engine built with TP=4)
+            # Engine path: ~/.cache/trtllm-engines/qwen3-tp4/ or TRTLLM_ENGINE_PATH
+            tritonserver-qwen3-tp4 = final.trtllm-engine.mkTritonServerRuntime {
+              name = "qwen3-tp4";
+              tokenizerModel = "nvidia/Qwen3-32B-NVFP4";
+              httpPort = 8000;
+              grpcPort = 8001;
+              metricsPort = 8002;
+              worldSize = 4;
+            };
+
+            # Triton server for Qwen3-32B 2-GPU
+            tritonserver-qwen3-tp2 = final.trtllm-engine.mkTritonServerRuntime {
+              name = "qwen3-tp2";
+              tokenizerModel = "nvidia/Qwen3-32B-NVFP4";
+              httpPort = 8000;
+              grpcPort = 8001;
+              metricsPort = 8002;
+              worldSize = 2;
             };
 
             # OpenAI-compatible proxy for Qwen3-32B (streaming, OpenWebUI)
