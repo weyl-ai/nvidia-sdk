@@ -833,23 +833,23 @@
             };
 
             # Qwen3-32B-NVFP4 TensorRT engine
+            # Build with: nix build .#qwen3-32b-engine --option sandbox false
             qwen3-32b-engine = final.trtllm-engine.mkEngine {
               name = "qwen3-32b-nvfp4";
-              hfModel = final.qwen3-32b-hf-model;
-              modelType = "qwen";
-              dtype = "bfloat16";
+              hfModel = "nvidia/Qwen3-32B-NVFP4";
+              quantization = "NVFP4";  # Pre-quantized NVFP4 model
               maxBatchSize = 8;
-              maxInputLen = 8192;
               maxSeqLen = 16384;
               maxNumTokens = 8192;
-              tensorParallelSize = 1;  # Single GPU
+              tensorParallelSize = 1;
             };
 
             # Qwen3-32B Triton model repository (native tensorrtllm backend)
+            # Note: The engine includes the tokenizer files, so we use it directly
             qwen3-32b-triton-repo = final.trtllm-engine.mkTritonRepo {
               name = "qwen3-32b";
               engine = final.qwen3-32b-engine;
-              tokenizer = final.qwen3-32b-hf-model;
+              tokenizer = final.qwen3-32b-engine;  # Engine dir includes tokenizer
               maxBatchSize = 8;
               kvCacheFreeGpuMemFraction = 0.9;
               enableChunkedContext = true;
@@ -863,10 +863,11 @@
               hash = "sha256-Uekvo4NlzbrbZcKPSyzd7opvZDh+JOE55jrUbcsMu8Q=";
             };
 
-            # Triton server for Qwen3-32B (native tensorrtllm backend)
-            tritonserver-qwen3 = final.trtllm-engine.mkTritonServer {
+            # Triton server for Qwen3-32B (runtime config, looks for engine in cache)
+            # Engine path: ~/.cache/trtllm-engines/qwen3/ or TRTLLM_ENGINE_PATH
+            tritonserver-qwen3 = final.trtllm-engine.mkTritonServerRuntime {
               name = "qwen3";
-              repo = final.qwen3-32b-triton-repo;
+              tokenizerModel = "nvidia/Qwen3-32B-NVFP4";
               httpPort = 8000;
               grpcPort = 8001;
               metricsPort = 8002;
@@ -875,7 +876,7 @@
             # OpenAI-compatible proxy for Qwen3-32B (streaming, OpenWebUI)
             openai-qwen3 = final.callPackage ./nix/openai-proxy.nix {
               tritonserver-trtllm = final.tritonserver-trtllm;
-              tokenizer = final.qwen3-32b-hf-model;
+              tokenizerModel = "nvidia/Qwen3-32B-NVFP4";
               modelName = "qwen3";
               tritonGrpcPort = 8001;
               openaiPort = 9000;

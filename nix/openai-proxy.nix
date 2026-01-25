@@ -1,7 +1,13 @@
-# OpenAI-compatible proxy for TensorRT-LLM native backend
+# OpenAI-compatible proxy for TensorRT-LLM backend
 #
-# Connects to Triton's GRPC endpoint with the tensorrtllm backend
-# and exposes an OpenAI-compatible REST API with streaming support.
+# This proxy handles:
+# - Chat template application (transformers)
+# - Tokenization/detokenization (transformers)
+# - GRPC streaming to tensorrt_llm backend
+# - SSE streaming to OpenAI clients
+#
+# The heavy lifting (inference) is done by Triton/TensorRT-LLM.
+# Tokenization will move to C++ (sentencepiece/tiktoken) later.
 #
 # Usage:
 #   nix run .#openai-qwen3
@@ -13,7 +19,7 @@
   writeTextFile,
   python312,
   tritonserver-trtllm,
-  tokenizer,        # Path to HF model for tokenizer
+  tokenizerModel,   # HuggingFace model ID for tokenizer
   modelName,        # Model name for API responses
   tritonGrpcPort ? 8001,
   openaiPort ? 9000,
@@ -27,19 +33,19 @@ let
     text = ''
 #!/usr/bin/env python3
 """
-OpenAI-compatible proxy for TensorRT-LLM native backend.
+OpenAI-compatible proxy for TensorRT-LLM backend.
 
-Connects to Triton GRPC with tensorrtllm backend (streaming decoupled mode)
-and exposes OpenAI chat/completions API with SSE streaming.
+Handles tokenization in Python (for now), streams tokens from tensorrt_llm,
+and detokenizes incrementally for SSE streaming.
 """
 import argparse
-import asyncio
 import json
+import queue
 import time
 import uuid
-from typing import AsyncGenerator, Optional
+from functools import partial
+from typing import Generator, Optional
 
-import grpc
 import numpy as np
 import uvicorn
 from fastapi import FastAPI, HTTPException
@@ -47,8 +53,8 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from transformers import AutoTokenizer
 
-# Triton GRPC protos
-import tritonclient.grpc.aio as grpcclient
+import tritonclient.grpc as grpcclient
+from tritonclient.utils import InferenceServerException, np_to_triton_dtype
 
 
 class ChatMessage(BaseModel):
@@ -65,6 +71,28 @@ class ChatCompletionRequest(BaseModel):
     stream: Optional[bool] = False
 
 
+class UserData:
+    """Container for streaming callback results."""
+    def __init__(self):
+        self._completed_requests = queue.Queue()
+
+
+def streaming_callback(user_data: UserData, result, error):
+    """Callback for GRPC streaming responses."""
+    if error:
+        user_data._completed_requests.put(error)
+    else:
+        user_data._completed_requests.put(result)
+
+
+def prepare_tensor(name: str, data: np.ndarray) -> grpcclient.InferInput:
+    """Create a Triton GRPC input tensor."""
+    dtype_str = np_to_triton_dtype(data.dtype)
+    tensor = grpcclient.InferInput(name, list(data.shape), dtype_str)
+    tensor.set_data_from_numpy(data)
+    return tensor
+
+
 class OpenAIProxy:
     def __init__(self, triton_url: str, model_name: str, tokenizer_path: str):
         self.triton_url = triton_url
@@ -72,10 +100,12 @@ class OpenAIProxy:
         self.created = int(time.time())
         
         print(f"Loading tokenizer from {tokenizer_path}...")
-        self.tokenizer = AutoTokenizer.from_pretrained(tokenizer_path, trust_remote_code=True)
+        self.tokenizer = AutoTokenizer.from_pretrained(
+            tokenizer_path, trust_remote_code=True
+        )
         
-        # Token IDs for generation control
-        self.end_id = self.tokenizer.eos_token_id or 151645
+        # Get special token IDs
+        self.end_id = self.tokenizer.eos_token_id or 151643
         self.pad_id = self.tokenizer.pad_token_id or self.end_id
         
         print(f"Tokenizer loaded. end_id={self.end_id}, pad_id={self.pad_id}")
@@ -91,73 +121,114 @@ class OpenAIProxy:
             print(f"Chat template failed: {e}, using fallback")
             return "\n".join(f"{m.role}: {m.content}" for m in messages) + "\nassistant:"
 
-    def tokenize(self, text: str) -> list[int]:
+    def tokenize(self, text: str) -> np.ndarray:
         """Tokenize text to input_ids."""
-        return self.tokenizer.encode(text, add_special_tokens=False)
+        ids = self.tokenizer.encode(text, add_special_tokens=False)
+        return np.array(ids, dtype=np.int32)
 
     def detokenize(self, token_ids: list[int]) -> str:
         """Decode token_ids to text."""
         return self.tokenizer.decode(token_ids, skip_special_tokens=True)
 
-    async def generate_stream(
+    def generate_streaming(
         self,
         prompt: str,
         max_tokens: int,
         temperature: float,
         top_p: float,
-    ) -> AsyncGenerator[str, None]:
-        """Stream generation via Triton GRPC with tensorrtllm backend."""
+    ) -> Generator[str, None, None]:
+        """Stream generation via Triton GRPC.
+        
+        TensorRT-LLM returns ONE token per response in streaming mode.
+        We accumulate tokens and incrementally detokenize.
+        """
         
         input_ids = self.tokenize(prompt)
         input_len = len(input_ids)
         
-        async with grpcclient.InferenceServerClient(url=self.triton_url) as client:
-            # Prepare inputs for tensorrtllm backend
-            inputs = [
-                grpcclient.InferInput("input_ids", [1, input_len], "INT32"),
-                grpcclient.InferInput("input_lengths", [1], "INT32"),
-                grpcclient.InferInput("request_output_len", [1], "INT32"),
-                grpcclient.InferInput("end_id", [1], "INT32"),
-                grpcclient.InferInput("pad_id", [1], "INT32"),
-                grpcclient.InferInput("streaming", [1], "BOOL"),
-                grpcclient.InferInput("temperature", [1], "FP32"),
-                grpcclient.InferInput("top_p", [1], "FP32"),
-            ]
+        # Prepare inputs for tensorrt_llm backend
+        # All tensors need batch dimension
+        inputs = [
+            prepare_tensor("input_ids", input_ids.reshape(1, -1)),
+            prepare_tensor("input_lengths", np.array([[input_len]], dtype=np.int32)),
+            prepare_tensor("request_output_len", np.array([[max_tokens]], dtype=np.int32)),
+            prepare_tensor("end_id", np.array([[self.end_id]], dtype=np.int32)),
+            prepare_tensor("pad_id", np.array([[self.pad_id]], dtype=np.int32)),
+            prepare_tensor("streaming", np.array([[True]], dtype=bool)),
+            prepare_tensor("temperature", np.array([[temperature]], dtype=np.float32)),
+            prepare_tensor("runtime_top_p", np.array([[top_p]], dtype=np.float32)),
+        ]
+        
+        outputs = [
+            grpcclient.InferRequestedOutput("output_ids"),
+            grpcclient.InferRequestedOutput("sequence_length"),
+        ]
+        
+        user_data = UserData()
+        
+        # Accumulate generated tokens for incremental detokenization
+        gen_tokens = []
+        prev_text = ""
+        
+        with grpcclient.InferenceServerClient(url=self.triton_url) as client:
+            # Start streaming with callback
+            client.start_stream(callback=partial(streaming_callback, user_data))
             
-            inputs[0].set_data_from_numpy(np.array([input_ids], dtype=np.int32))
-            inputs[1].set_data_from_numpy(np.array([input_len], dtype=np.int32))
-            inputs[2].set_data_from_numpy(np.array([max_tokens], dtype=np.int32))
-            inputs[3].set_data_from_numpy(np.array([self.end_id], dtype=np.int32))
-            inputs[4].set_data_from_numpy(np.array([self.pad_id], dtype=np.int32))
-            inputs[5].set_data_from_numpy(np.array([True], dtype=bool))
-            inputs[6].set_data_from_numpy(np.array([temperature], dtype=np.float32))
-            inputs[7].set_data_from_numpy(np.array([top_p], dtype=np.float32))
-            
-            outputs = [grpcclient.InferRequestedOutput("output_ids")]
-            
-            # Stream responses (decoupled mode)
-            prev_output_len = 0
-            async for response in client.stream_infer(
-                model_name="tensorrt_llm",
-                inputs=inputs,
-                outputs=outputs,
-            ):
-                result, error = response
-                if error:
-                    raise HTTPException(status_code=500, detail=str(error))
+            try:
+                # Send inference request
+                client.async_stream_infer(
+                    model_name="tensorrt_llm",
+                    inputs=inputs,
+                    outputs=outputs,
+                    request_id=str(uuid.uuid4()),
+                )
                 
-                output_ids = result.as_numpy("output_ids")
-                if output_ids is not None:
-                    # Get new tokens since last response
-                    current_ids = output_ids.flatten().tolist()
-                    # Skip input tokens and already-yielded tokens
-                    new_ids = current_ids[input_len + prev_output_len:]
-                    if new_ids:
-                        new_text = self.detokenize(new_ids)
-                        prev_output_len = len(current_ids) - input_len
+                # Process streaming responses
+                # TensorRT-LLM returns ONE token per response
+                while True:
+                    try:
+                        result = user_data._completed_requests.get(timeout=60.0)
+                    except queue.Empty:
+                        print("Timeout waiting for response")
+                        break
+                    
+                    if isinstance(result, InferenceServerException):
+                        print(f"Inference error: {result}")
+                        break
+                    
+                    # Get output token - shape is [1, 1, 1] (batch, beam, 1 token)
+                    output_ids = result.as_numpy("output_ids")
+                    
+                    if output_ids is None:
+                        continue
+                    
+                    # Extract the single token
+                    token = int(output_ids[0, 0, 0])
+                    
+                    # Check for end token BEFORE accumulating
+                    if token == self.end_id:
+                        break
+                    
+                    # Accumulate token
+                    gen_tokens.append(token)
+                    
+                    # Detokenize all generated tokens so far
+                    full_text = self.detokenize(gen_tokens)
+                    
+                    # Yield only new text since last response
+                    if len(full_text) > len(prev_text):
+                        new_text = full_text[len(prev_text):]
+                        prev_text = full_text
                         yield new_text
+                    
+                    # Check max tokens
+                    if len(gen_tokens) >= max_tokens:
+                        break
+                        
+            finally:
+                client.stop_stream()
 
-    async def generate(
+    def generate(
         self,
         prompt: str,
         max_tokens: int,
@@ -166,7 +237,7 @@ class OpenAIProxy:
     ) -> str:
         """Non-streaming generation."""
         chunks = []
-        async for chunk in self.generate_stream(prompt, max_tokens, temperature, top_p):
+        for chunk in self.generate_streaming(prompt, max_tokens, temperature, top_p):
             chunks.append(chunk)
         return "".join(chunks)
 
@@ -200,20 +271,26 @@ def create_app(proxy: OpenAIProxy) -> FastAPI:
         top_p = request.top_p or 0.9
         
         if request.stream:
-            async def stream_response() -> AsyncGenerator[str, None]:
-                async for chunk in proxy.generate_stream(prompt, max_tokens, temperature, top_p):
-                    data = {
-                        "id": request_id,
-                        "object": "chat.completion.chunk",
-                        "created": int(time.time()),
-                        "model": request.model,
-                        "choices": [{
-                            "index": 0,
-                            "delta": {"content": chunk},
-                            "finish_reason": None,
-                        }]
-                    }
-                    yield f"data: {json.dumps(data)}\n\n"
+            def stream_response():
+                try:
+                    for chunk in proxy.generate_streaming(prompt, max_tokens, temperature, top_p):
+                        if chunk:
+                            data = {
+                                "id": request_id,
+                                "object": "chat.completion.chunk",
+                                "created": int(time.time()),
+                                "model": request.model,
+                                "choices": [{
+                                    "index": 0,
+                                    "delta": {"content": chunk},
+                                    "finish_reason": None,
+                                }]
+                            }
+                            yield f"data: {json.dumps(data)}\n\n"
+                except Exception as e:
+                    print(f"Streaming error: {e}")
+                    import traceback
+                    traceback.print_exc()
                 
                 # Final message
                 final = {
@@ -235,7 +312,7 @@ def create_app(proxy: OpenAIProxy) -> FastAPI:
                 media_type="text/event-stream",
             )
         else:
-            text = await proxy.generate(prompt, max_tokens, temperature, top_p)
+            text = proxy.generate(prompt, max_tokens, temperature, top_p)
             return {
                 "id": request_id,
                 "object": "chat.completion",
@@ -261,7 +338,7 @@ def main():
     parser.add_argument("--port", type=int, default=${toString openaiPort})
     parser.add_argument("--triton-url", type=str, default="localhost:${toString tritonGrpcPort}")
     parser.add_argument("--model-name", type=str, default="${modelName}")
-    parser.add_argument("--tokenizer", type=str, default="${tokenizer}")
+    parser.add_argument("--tokenizer", type=str, default="${tokenizerModel}")
     args = parser.parse_args()
     
     proxy = OpenAIProxy(args.triton_url, args.model_name, args.tokenizer)
@@ -270,7 +347,7 @@ def main():
     print(f"""
 ╔══════════════════════════════════════════════════════════════════╗
 ║  OpenAI Proxy: {args.model_name}
-║  Backend: grpc://{args.triton_url}
+║  Backend: grpc://{args.triton_url} (tensorrt_llm)
 ╠══════════════════════════════════════════════════════════════════╣
 ║  http://localhost:{args.port}/v1/chat/completions
 ║  http://localhost:{args.port}/v1/models
@@ -292,6 +369,7 @@ writeShellApplication {
   name = "openai-${modelName}";
   runtimeInputs = [ python ];
   text = ''
+    # Add tritonclient from tritonserver
     export PYTHONPATH="${tritonserver-trtllm}/python''${PYTHONPATH:+:$PYTHONPATH}"
     exec ${python}/bin/python ${proxyScript} "$@"
   '';
