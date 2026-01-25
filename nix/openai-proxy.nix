@@ -310,6 +310,11 @@ def create_app(proxy: OpenAIProxy) -> FastAPI:
             return StreamingResponse(
                 stream_response(),
                 media_type="text/event-stream",
+                headers={
+                    "Cache-Control": "no-cache",
+                    "Connection": "keep-alive",
+                    "X-Accel-Buffering": "no",  # Disable nginx buffering
+                },
             )
         else:
             text = proxy.generate(prompt, max_tokens, temperature, top_p)
