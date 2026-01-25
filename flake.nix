@@ -151,6 +151,11 @@
                 btop-nvml
                 monitoring-tools
 
+                # TRT-LLM Python environment
+                trtllm-python
+                trtllm-build
+                trtllm-env
+
                 # Model runners
                 phi4-nvfp4-runner
                 tritonserver-phi4
@@ -176,15 +181,25 @@
             default = pkgs'.mkShell {
               packages = [
                 pkgs'.nvidia-sdk
+                pkgs'.tritonserver-trtllm
+                pkgs'.openmpi
+                pkgs'.prrte
+                pkgs'.python312
                 agenix
               ];
               shellHook = ''
                 echo "nvidia-sdk — CUDA ${versions.cuda.version}"
                 echo "Blackwell SM120 | Hopper SM90 | Ada SM89"
+                echo "TensorRT-LLM ${pkgs'.tritonserver-trtllm.version}"
                 echo ""
 
-                # Set up CUDA runtime library path (NixOS)
-                export LD_LIBRARY_PATH="/run/opengl-driver/lib''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+                # TRT-LLM Python environment
+                export PYTHONPATH="${pkgs'.tritonserver-trtllm}/python''${PYTHONPATH:+:$PYTHONPATH}"
+                export LD_LIBRARY_PATH="/run/opengl-driver/lib:${pkgs'.tritonserver-trtllm}/lib:${pkgs'.tritonserver-trtllm}/python/tensorrt_llm/libs:${pkgs'.cuda}/lib64:${pkgs'.cudnn}/lib:${pkgs'.nccl}/lib:${pkgs'.tensorrt}/lib:${pkgs'.openmpi}/lib:${pkgs'.python312}/lib''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+                export CUDA_HOME="${pkgs'.cuda}"
+
+                # Aliases for convenience
+                alias trtllm-build='python -m tensorrt_llm.commands.build'
 
                 nvidia-sdk-validate || true
               '';
@@ -449,6 +464,19 @@
               type = "app";
               program = "${pkgs'.monitoring-tools}/bin/gpu-monitor";
               meta.description = "Quick GPU monitoring dashboard";
+            };
+
+            # TRT-LLM Python environment
+            python = {
+              type = "app";
+              program = "${pkgs'.trtllm-python}/bin/python";
+              meta.description = "Python with TensorRT-LLM environment";
+            };
+
+            trtllm-build = {
+              type = "app";
+              program = "${pkgs'.trtllm-build}/bin/trtllm-build";
+              meta.description = "TensorRT-LLM engine builder";
             };
 
             phi4-nvfp4 = {
@@ -830,6 +858,36 @@
               tritonserver-trtllm = final.tritonserver-trtllm;
               inherit triton-trtllm-container;
               cuda = final.cuda;
+            };
+
+            # Python with TensorRT-LLM environment
+            # Usage: nix run .#python -- -c "from tensorrt_llm import LLM; print('ok')"
+            # Or:    nix shell .#python -c "trtllm-build --help"
+            trtllm-python = final.writeShellScriptBin "python" ''
+              export PYTHONPATH="${final.tritonserver-trtllm}/python''${PYTHONPATH:+:$PYTHONPATH}"
+              export LD_LIBRARY_PATH="/run/opengl-driver/lib:${final.tritonserver-trtllm}/lib:${final.tritonserver-trtllm}/python/tensorrt_llm/libs:${final.cuda}/lib64:${final.cudnn}/lib:${final.nccl}/lib:${final.tensorrt}/lib:${final.openmpi}/lib:${final.python312}/lib''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+              export CUDA_HOME="${final.cuda}"
+              exec ${final.python312}/bin/python "$@"
+            '';
+
+            # TRT-LLM build command wrapper
+            trtllm-build = final.writeShellScriptBin "trtllm-build" ''
+              export PYTHONPATH="${final.tritonserver-trtllm}/python''${PYTHONPATH:+:$PYTHONPATH}"
+              export LD_LIBRARY_PATH="/run/opengl-driver/lib:${final.tritonserver-trtllm}/lib:${final.tritonserver-trtllm}/python/tensorrt_llm/libs:${final.cuda}/lib64:${final.cudnn}/lib:${final.nccl}/lib:${final.tensorrt}/lib:${final.openmpi}/lib:${final.python312}/lib''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+              export CUDA_HOME="${final.cuda}"
+              exec ${final.python312}/bin/python -m tensorrt_llm.commands.build "$@"
+            '';
+
+            # Full TRT-LLM development environment
+            trtllm-env = final.buildEnv {
+              name = "trtllm-env";
+              paths = [
+                final.trtllm-python
+                final.trtllm-build
+                final.tritonserver-trtllm
+                final.openmpi
+                final.prrte
+              ];
             };
 
             # TensorRT-LLM engine builder (C++ native - build-time engine)
