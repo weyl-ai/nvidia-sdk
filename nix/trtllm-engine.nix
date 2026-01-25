@@ -206,9 +206,13 @@ PYTHON_DOWNLOAD
 
         echo "Step 2: Converting model to TRT-LLM checkpoint (all ranks)..."
         
+        QUANTIZATION="${if quantization != null then quantization else ""}"
+        export QUANTIZATION
+        
         ${python}/bin/python << 'PYTHON_CONVERT'
 import os
 import sys
+import json
 
 os.environ['CUDA_VISIBLE_DEVICES'] = '${cudaDevices}'
 
@@ -217,12 +221,52 @@ from tensorrt_llm.mapping import Mapping
 
 model_dir = os.environ['MODEL_DIR']
 checkpoint_dir = os.environ['CHECKPOINT_DIR']
+quantization = os.environ.get('QUANTIZATION', "")
 tp_size = ${toString tensorParallelSize}
 pp_size = ${toString pipelineParallelSize}
 world_size = tp_size * pp_size
 
 print(f"Converting model from: {model_dir}")
 print(f"  TP: {tp_size}, PP: {pp_size}, World: {world_size}")
+print(f"  Quantization: {quantization or 'none'}")
+sys.stdout.flush()
+
+# Check if model has embedded quantization config (pre-quantized NVFP4 models)
+quant_config = None
+hf_quant_config_path = os.path.join(model_dir, "hf_quant_config.json")
+if os.path.exists(hf_quant_config_path):
+    with open(hf_quant_config_path) as f:
+        hf_quant_cfg = json.load(f)
+    # The quant_algo can be at top level or nested under "quantization"
+    quant_section = hf_quant_cfg.get("quantization", hf_quant_cfg)
+    quant_algo = quant_section.get("quant_algo")
+    print(f"  Found HF quant config: quant_algo={quant_algo}")
+    
+    # For NVFP4, we need to pass the quant_config to from_hugging_face()
+    # This tells TRT-LLM that the weights are already quantized
+    if quant_algo == "NVFP4":
+        from tensorrt_llm.models.modeling_utils import QuantConfig
+        from tensorrt_llm.quantization import QuantAlgo
+        quant_config = QuantConfig(
+            quant_algo=QuantAlgo.NVFP4,
+            kv_cache_quant_algo=QuantAlgo.FP8,  # FP8 KV cache from the config
+            group_size=quant_section.get("group_size", 16),
+        )
+        print(f"  Using QuantConfig: {quant_config}")
+elif quantization:
+    # Manual quantization specified but no pre-quantized weights
+    from tensorrt_llm.models.modeling_utils import QuantConfig
+    from tensorrt_llm.quantization import QuantAlgo
+    quant_algo_map = {
+        "NVFP4": QuantAlgo.NVFP4,
+        "FP8": QuantAlgo.FP8,
+        "W8A16": QuantAlgo.W8A16,
+        "W4A16": QuantAlgo.W4A16,
+    }
+    if quantization.upper() in quant_algo_map:
+        quant_config = QuantConfig(quant_algo=quant_algo_map[quantization.upper()])
+        print(f"  Using QuantConfig: {quant_config}")
+
 sys.stdout.flush()
 
 # Convert and save checkpoint for EACH rank
@@ -241,6 +285,7 @@ for rank in range(world_size):
         model_dir,
         dtype="auto",
         mapping=mapping,
+        quant_config=quant_config,
         trust_remote_code=True,
     )
     
@@ -270,12 +315,14 @@ PYTHON_CONVERT
           --paged_kv_cache enable \
           --use_paged_context_fmha enable
         
-        # Copy tokenizer files from downloaded model
+        # Copy tokenizer files from downloaded model (but NOT config.json - that's the engine config!)
         echo "Copying tokenizer files..."
-        cp "$MODEL_DIR"/*.json "$ENGINE_DIR/" 2>/dev/null || true
-        cp "$MODEL_DIR"/tokenizer* "$ENGINE_DIR/" 2>/dev/null || true
-        cp "$MODEL_DIR"/vocab* "$ENGINE_DIR/" 2>/dev/null || true
-        cp "$MODEL_DIR"/merges* "$ENGINE_DIR/" 2>/dev/null || true
+        cp "$MODEL_DIR"/tokenizer.json "$ENGINE_DIR/" 2>/dev/null || true
+        cp "$MODEL_DIR"/tokenizer_config.json "$ENGINE_DIR/" 2>/dev/null || true
+        cp "$MODEL_DIR"/vocab.json "$ENGINE_DIR/" 2>/dev/null || true
+        cp "$MODEL_DIR"/merges.txt "$ENGINE_DIR/" 2>/dev/null || true
+        cp "$MODEL_DIR"/added_tokens.json "$ENGINE_DIR/" 2>/dev/null || true
+        cp "$MODEL_DIR"/special_tokens_map.json "$ENGINE_DIR/" 2>/dev/null || true
         cp "$MODEL_DIR"/*.jinja "$ENGINE_DIR/" 2>/dev/null || true
         ''}
 
