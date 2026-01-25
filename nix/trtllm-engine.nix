@@ -204,7 +204,7 @@ print(f"Model downloaded to: {local_dir}")
 print("Files:", os.listdir(local_dir))
 PYTHON_DOWNLOAD
 
-        echo "Step 2: Converting model to TRT-LLM checkpoint..."
+        echo "Step 2: Converting model to TRT-LLM checkpoint (all ranks)..."
         
         ${python}/bin/python << 'PYTHON_CONVERT'
 import os
@@ -225,26 +225,33 @@ print(f"Converting model from: {model_dir}")
 print(f"  TP: {tp_size}, PP: {pp_size}, World: {world_size}")
 sys.stdout.flush()
 
-# Create mapping
-mapping = Mapping(
-    world_size=world_size,
-    rank=0,
-    tp_size=tp_size,
-    pp_size=pp_size,
-)
+# Convert and save checkpoint for EACH rank
+for rank in range(world_size):
+    print(f"\n[Rank {rank}/{world_size}] Loading and converting weights...")
+    sys.stdout.flush()
+    
+    mapping = Mapping(
+        world_size=world_size,
+        rank=rank,
+        tp_size=tp_size,
+        pp_size=pp_size,
+    )
+    
+    model = QWenForCausalLM.from_hugging_face(
+        model_dir,
+        dtype="auto",
+        mapping=mapping,
+        trust_remote_code=True,
+    )
+    
+    print(f"[Rank {rank}] Saving checkpoint...")
+    sys.stdout.flush()
+    model.save_checkpoint(checkpoint_dir)
+    
+    # Clear model to free memory before loading next rank
+    del model
 
-# Load from local directory and save checkpoint
-model = QWenForCausalLM.from_hugging_face(
-    model_dir,
-    dtype="auto",  # Keep original dtype (NVFP4)
-    mapping=mapping,
-    trust_remote_code=True,
-)
-
-print(f"Saving checkpoint to {checkpoint_dir}...")
-sys.stdout.flush()
-model.save_checkpoint(checkpoint_dir)
-print("Checkpoint saved!")
+print(f"\nCheckpoint conversion complete!")
 print("Files:", os.listdir(checkpoint_dir))
 sys.stdout.flush()
 PYTHON_CONVERT
