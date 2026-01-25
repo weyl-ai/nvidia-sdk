@@ -440,7 +440,8 @@ in
 
       serviceConfig = {
         Type = "forking";
-        ExecStart = "${pkgs.prrte}/bin/prte --daemonize --system-server --allow-run-as-root";
+        ExecStart = "${pkgs.prrte}/bin/prte --daemonize --system-server --allow-run-as-root --report-uri /run/prte/uri --tmpdir /run/prte/tmp";
+        ExecStartPost = "${pkgs.coreutils}/bin/chmod 644 /run/prte/uri";
         ExecStop = "${pkgs.prrte}/bin/pterm";
         Restart = "on-failure";
         RestartSec = "5s";
@@ -450,14 +451,22 @@ in
         Group = "root";
 
         # Runtime directory for PRTE state
-        RuntimeDirectory = "prte";
+        RuntimeDirectory = "prte prte/tmp";
         RuntimeDirectoryMode = "0755";
       };
 
       environment = {
         # Ensure PRTE can find OpenMPI libraries
         LD_LIBRARY_PATH = lib.makeLibraryPath [ pkgs.openmpi pkgs.prrte ];
+        # Set PRTE tmpdir
+        PRTE_MCA_prte_tmpdir_base = "/run/prte/tmp";
       };
+    };
+
+    # Environment variables for all users to connect to PRTE DVM
+    environment.variables = lib.mkIf cfg.mpi.enable {
+      PRTE_MCA_prte_system_server_uri = "file:/run/prte/uri";
+      PMIX_SYSTEM_TMPDIR = "/run/prte/tmp";
     };
 
     # ──────────────────────────────────────────────────────────────────────────
