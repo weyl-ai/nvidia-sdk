@@ -980,9 +980,11 @@ def format_prompt(text, thinking=False):
 
             # Qwen3-32B-NVFP4 TensorRT engine (pre-built)
             # Uses the locally downloaded HF model to avoid network access during build
-            qwen3-32b-engine = final.trtllm-engine.mkEngineFromHf {
+            qwen3-32b-engine = final.trtllm-engine.mkEngine {
               name = "qwen3-32b-nvfp4";
-              model = final.qwen3-32b-hf-model;  # Use local model, not HF ID
+              hfModel = final.qwen3-32b-hf-model;
+              modelType = "qwen";
+              dtype = "bfloat16";
               maxBatchSize = 8;
               maxInputLen = 8192;
               maxSeqLen = 16384;

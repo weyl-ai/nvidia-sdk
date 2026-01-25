@@ -616,3 +616,171 @@ export HOME=/path/to/writable/dir
 | LlamaForCausalLM | LLaMAForCausalLM | examples/llama/ |
 | PhiForCausalLM | PhiForCausalLM | examples/phi/ |
 | MixtralForCausalLM | MixtralForCausalLM | examples/mixtral/ |
+
+---
+
+## Appendix: Manual Engine Building Workflow
+
+When building TRT-LLM engines manually (outside of Nix), use this workflow to avoid disk space issues.
+
+### Prerequisites
+
+Large models require significant disk space for:
+- HuggingFace model cache (~20-100GB depending on model)
+- TRT-LLM checkpoint conversion (~60-70GB for 32B models)
+- TensorRT engine output (~60-70GB for 32B models)
+- Temporary build files (~50GB peak)
+
+**Total: ~200-300GB for a 32B parameter model**
+
+### Step 1: Set Up Cache Directories on Large Disk
+
+Relocate caches to a disk with sufficient space:
+
+```bash
+# Create cache directories on large disk
+CACHE_ROOT="/path/to/large/disk/cache"
+mkdir -p "$CACHE_ROOT"/{huggingface,trtllm-checkpoints,trtllm-engines,tmp}
+
+# Symlink from home (for tools that use default paths)
+ln -sf "$CACHE_ROOT/huggingface" ~/.cache/huggingface
+ln -sf "$CACHE_ROOT/trtllm-checkpoints" ~/.cache/trtllm-checkpoints
+ln -sf "$CACHE_ROOT/trtllm-engines" ~/.cache/trtllm-engines
+
+# Set TMPDIR for build operations
+export TMPDIR="$CACHE_ROOT/tmp"
+export TEMP="$CACHE_ROOT/tmp"
+```
+
+### Step 2: Download HuggingFace Model
+
+```bash
+# Using git-lfs (recommended for large models)
+cd "$CACHE_ROOT/huggingface"
+git lfs install
+git clone --depth 1 https://huggingface.co/nvidia/Qwen3-32B-NVFP4
+
+# Or using huggingface-cli
+huggingface-cli download nvidia/Qwen3-32B-NVFP4 --local-dir "$CACHE_ROOT/huggingface/Qwen3-32B-NVFP4"
+```
+
+### Step 3: Convert to TRT-LLM Checkpoint
+
+Enter the nvidia-sdk devShell and convert:
+
+```bash
+cd /path/to/nvidia-sdk
+nix develop
+
+# Set paths
+HF_MODEL="$CACHE_ROOT/huggingface/Qwen3-32B-NVFP4"
+TLLM_CHECKPOINT="$CACHE_ROOT/trtllm-checkpoints/qwen3-32b-nvfp4"
+mkdir -p "$TLLM_CHECKPOINT"
+
+# Convert using TRT-LLM Python API
+python << 'PYTHON'
+import os
+from tensorrt_llm.models import QWenForCausalLM
+from tensorrt_llm.mapping import Mapping
+
+model_dir = os.environ["HF_MODEL"]
+checkpoint_dir = os.environ["TLLM_CHECKPOINT"]
+
+print(f"Loading model from {model_dir}...")
+
+# Single GPU configuration
+mapping = Mapping(world_size=1, rank=0, tp_size=1, pp_size=1)
+
+# Load and convert
+model = QWenForCausalLM.from_hugging_face(
+    model_dir,
+    dtype="bfloat16",
+    mapping=mapping,
+)
+
+print(f"Saving checkpoint to {checkpoint_dir}...")
+model.save_checkpoint(checkpoint_dir)
+print("Done!")
+PYTHON
+```
+
+**Output**: `$TLLM_CHECKPOINT/` containing `config.json` and `rank0.safetensors` (~65GB)
+
+### Step 4: Build TensorRT Engine
+
+```bash
+ENGINE_DIR="$CACHE_ROOT/trtllm-engines/qwen3-32b-nvfp4"
+mkdir -p "$ENGINE_DIR"
+
+python -m tensorrt_llm.commands.build \
+  --checkpoint_dir "$TLLM_CHECKPOINT" \
+  --output_dir "$ENGINE_DIR" \
+  --gemm_plugin bfloat16 \
+  --max_batch_size 8 \
+  --max_input_len 8192 \
+  --max_seq_len 16384 \
+  --max_num_tokens 8192 \
+  --paged_kv_cache enable \
+  --use_paged_context_fmha enable
+```
+
+**Build time**: ~2-5 minutes on Blackwell  
+**Output**: `$ENGINE_DIR/` containing `config.json` and `rank0.engine` (~62GB)
+
+### Step 5: Verify Engine
+
+```bash
+# Check engine files
+ls -la "$ENGINE_DIR/"
+
+# Test with quick inference (optional)
+python << 'PYTHON'
+from tensorrt_llm import LLM, SamplingParams
+import os
+
+engine_dir = os.environ["ENGINE_DIR"]
+llm = LLM(model=engine_dir)
+output = llm.generate(["Hello, world!"], SamplingParams(max_tokens=50))
+print(output[0].outputs[0].text)
+PYTHON
+```
+
+### Multi-GPU (Tensor Parallelism)
+
+For TP > 1, modify the mapping in Step 3:
+
+```python
+# 4-GPU tensor parallelism
+mapping = Mapping(world_size=4, rank=0, tp_size=4, pp_size=1)
+```
+
+And run the build with MPI:
+
+```bash
+mpirun -np 4 python -m tensorrt_llm.commands.build \
+  --checkpoint_dir "$TLLM_CHECKPOINT" \
+  --output_dir "$ENGINE_DIR" \
+  --gemm_plugin bfloat16 \
+  --max_batch_size 8 \
+  --paged_kv_cache enable \
+  --use_paged_context_fmha enable
+```
+
+### Troubleshooting
+
+**"No space left on device"**
+- Check `df -h` and ensure TMPDIR points to disk with >100GB free
+- Move caches to larger disk as shown in Step 1
+
+**"Permission denied" errors**
+- Ensure HOME and cache directories are writable
+- Check if running as root left root-owned files: `sudo chown -R $USER:$USER $CACHE_ROOT`
+
+**GPU out of memory during build**
+- Reduce `--max_batch_size` or `--max_seq_len`
+- For very large models, use tensor parallelism (TP > 1)
+
+**Engine build succeeds but inference fails**
+- Verify CUDA and driver compatibility
+- Check `nvidia-smi` shows correct GPU
+- Ensure `LD_LIBRARY_PATH` includes CUDA and TensorRT libs

@@ -1,17 +1,25 @@
 # TensorRT-LLM Engine Builder
-# 
-# Provides derivations for building TRT-LLM engines and Triton model repositories.
+#
+# Builds TRT-LLM engines using the canonical workflow:
+#   HuggingFace Model → Model.from_hugging_face() → save_checkpoint() → trtllm-build → Triton
+#
 # These are IMPURE builds that require GPU access (__noChroot = true).
 #
 # Usage:
 #   engines = callPackage ./trtllm-engine.nix { };
-#   qwen3-engine = engines.mkEngine { 
+#
+#   # For pre-quantized NVFP4 models (nvidia/*)
+#   qwen3-engine = engines.mkEngine {
 #     name = "qwen3-32b-nvfp4";
-#     model = "nvidia/Qwen3-32B-NVFP4";
+#     hfModel = /path/to/nvidia/Qwen3-32B-NVFP4;  # or use mkHfModel
+#     modelType = "qwen";
+#     tensorParallelSize = 4;
 #   };
+#
 #   qwen3-triton = engines.mkTritonRepo {
 #     name = "qwen3-32b";
 #     engine = qwen3-engine;
+#     tokenizer = /path/to/nvidia/Qwen3-32B-NVFP4;
 #   };
 
 {
@@ -21,7 +29,6 @@
   runCommand,
   writeTextFile,
   writeShellApplication,
-  fetchurl,
   cacert,
   git,
   git-lfs,
@@ -35,6 +42,15 @@ let
   python = python312;
   triton = tritonserver-trtllm;
 
+  # Model class mapping for TRT-LLM
+  modelClasses = {
+    qwen = "QWenForCausalLM";
+    llama = "LLaMAForCausalLM";
+    phi = "PhiForCausalLM";
+    mixtral = "MixtralForCausalLM";
+    gemma = "GemmaForCausalLM";
+  };
+
   # Environment setup for TRT-LLM commands
   envSetup = ''
     export PYTHONPATH="${triton}/python''${PYTHONPATH:+:$PYTHONPATH}"
@@ -43,12 +59,11 @@ let
     export HOME="$TMPDIR/home"
     export HF_HOME="$TMPDIR/hf_cache"
     export TLLM_LOG_LEVEL="WARNING"
-    export FLASHINFER_WORKSPACE_DIR="$TMPDIR/flashinfer"
-    mkdir -p "$HOME" "$HF_HOME" "$FLASHINFER_WORKSPACE_DIR"
+    mkdir -p "$HOME" "$HF_HOME"
   '';
 
 in
-{
+rec {
   inherit python openmpi triton cuda envSetup;
 
   # ============================================================================
@@ -88,90 +103,32 @@ in
     };
 
   # ============================================================================
-  # mkCheckpoint: Convert HuggingFace model to TRT-LLM checkpoint format
+  # mkEngine: Build TensorRT engine from HuggingFace model
   # ============================================================================
-  # NOTE: This is an IMPURE build that requires GPU access for quantized models
-  mkCheckpoint =
+  #
+  # This is the ONE PATH for building TRT-LLM engines:
+  #   1. Model.from_hugging_face() + save_checkpoint(): HF model → TRT-LLM checkpoint
+  #   2. trtllm-build: checkpoint → TensorRT engine
+  #
+  mkEngine =
     {
-      name,           # e.g. "qwen3-32b-nvfp4"
-      hfModel,        # Output of mkHfModel
-      modelType ? "qwen",  # Model architecture: qwen, llama, phi, etc.
+      name,                    # e.g. "qwen3-32b-nvfp4"
+      hfModel,                 # Path to HuggingFace model directory
+      modelType ? "qwen",      # Model architecture: qwen, llama, phi, etc.
       dtype ? "bfloat16",
       tensorParallelSize ? 1,
       pipelineParallelSize ? 1,
-      extraArgs ? "",
-    }:
-    stdenv.mkDerivation {
-      pname = "trtllm-checkpoint-${name}";
-      version = "1.0.0";
-
-      # IMPURE: requires GPU for quantized model conversion
-      __noChroot = true;
-
-      nativeBuildInputs = [ python openmpi ];
-
-      buildCommand = ''
-        ${envSetup}
-
-        echo "Converting ${name} to TRT-LLM checkpoint format..."
-        echo "Model type: ${modelType}"
-        echo "Source: ${hfModel}"
-        
-        mkdir -p $out
-
-        # Use TRT-LLM's convert module
-        ${python}/bin/python -c "
-import sys
-sys.path.insert(0, '${triton}/python')
-
-from tensorrt_llm.models.${modelType}.convert import convert_hf_config, convert_hf_weights
-from tensorrt_llm.models.${modelType}.config import ${lib.toUpper (builtins.substring 0 1 modelType)}${builtins.substring 1 (-1) modelType}Config
-from tensorrt_llm.mapping import Mapping
-import json
-import os
-
-hf_model_dir = '${hfModel}'
-output_dir = '$out'
-dtype = '${dtype}'
-tp_size = ${toString tensorParallelSize}
-pp_size = ${toString pipelineParallelSize}
-
-print(f'Loading config from {hf_model_dir}')
-config = convert_hf_config(hf_model_dir, dtype=dtype, mapping=Mapping(world_size=tp_size*pp_size, tp_size=tp_size, pp_size=pp_size))
-
-print(f'Saving config to {output_dir}')
-with open(os.path.join(output_dir, 'config.json'), 'w') as f:
-    json.dump(config.to_dict(), f, indent=2)
-
-print('Converting weights...')
-convert_hf_weights(hf_model_dir, output_dir, config)
-
-print('Checkpoint conversion complete')
-" ${extraArgs}
-
-        echo "Checkpoint saved to $out"
-      '';
-
-      meta = {
-        description = "TRT-LLM checkpoint for ${name}";
-      };
-    };
-
-  # ============================================================================
-  # mkEngine: Build TensorRT engine from checkpoint
-  # ============================================================================
-  # NOTE: This is an IMPURE build that requires GPU access
-  mkEngine =
-    {
-      name,           # e.g. "qwen3-32b-nvfp4"
-      checkpoint,     # Output of mkCheckpoint, or path to HF model for unified models
       maxBatchSize ? 8,
       maxInputLen ? 8192,
       maxSeqLen ? 16384,
       maxNumTokens ? 8192,
-      gemmPlugin ? "bfloat16",
-      extraArgs ? "",
+      extraBuildArgs ? "",     # Extra args for trtllm-build
     }:
+    let
+      worldSize = tensorParallelSize * pipelineParallelSize;
+      modelClass = modelClasses.${modelType} or (throw "Unknown model type: ${modelType}");
+      gemmPlugin = dtype;
+    in
     stdenv.mkDerivation {
       pname = "trtllm-engine-${name}";
       version = "1.0.0";
@@ -184,13 +141,74 @@ print('Checkpoint conversion complete')
       buildCommand = ''
         ${envSetup}
 
-        echo "Building TensorRT engine for ${name}..."
-        echo "Checkpoint: ${checkpoint}"
-        
-        mkdir -p $out
+        CHECKPOINT_DIR="$TMPDIR/checkpoint"
+        mkdir -p "$CHECKPOINT_DIR" "$out"
+
+        echo "════════════════════════════════════════════════════════════════"
+        echo "Building TensorRT-LLM engine: ${name}"
+        echo "════════════════════════════════════════════════════════════════"
+        echo "Model: ${hfModel}"
+        echo "Type: ${modelType} (${modelClass})"
+        echo "TP: ${toString tensorParallelSize}, PP: ${toString pipelineParallelSize}"
+        echo ""
+
+        # ──────────────────────────────────────────────────────────────────────
+        # Step 1: Convert HuggingFace model to TRT-LLM checkpoint
+        # ──────────────────────────────────────────────────────────────────────
+        echo "Step 1: Converting HuggingFace model to TRT-LLM checkpoint..."
+
+        ${python}/bin/python << 'PYTHON_CONVERT'
+import os
+import sys
+
+# TRT-LLM model conversion
+from tensorrt_llm.models import ${modelClass}
+from tensorrt_llm.mapping import Mapping
+
+model_dir = "${hfModel}"
+checkpoint_dir = os.environ["CHECKPOINT_DIR"]
+tp_size = ${toString tensorParallelSize}
+pp_size = ${toString pipelineParallelSize}
+world_size = tp_size * pp_size
+
+print(f"Loading model from {model_dir}...")
+print(f"  Tensor Parallel: {tp_size}")
+print(f"  Pipeline Parallel: {pp_size}")
+print(f"  World Size: {world_size}")
+
+# Create mapping for parallelism
+mapping = Mapping(
+    world_size=world_size,
+    rank=0,  # We save rank 0 checkpoint, trtllm-build handles sharding
+    tp_size=tp_size,
+    pp_size=pp_size,
+)
+
+# Load and convert model
+model = ${modelClass}.from_hugging_face(
+    model_dir,
+    dtype="${dtype}",
+    mapping=mapping,
+)
+
+print(f"Saving checkpoint to {checkpoint_dir}...")
+model.save_checkpoint(checkpoint_dir)
+
+print("Checkpoint conversion complete!")
+print("Contents:", os.listdir(checkpoint_dir))
+PYTHON_CONVERT
+
+        echo "Checkpoint created at $CHECKPOINT_DIR"
+        ls -la "$CHECKPOINT_DIR/"
+
+        # ──────────────────────────────────────────────────────────────────────
+        # Step 2: Build TensorRT engine
+        # ──────────────────────────────────────────────────────────────────────
+        echo ""
+        echo "Step 2: Building TensorRT engine..."
 
         ${python}/bin/python -m tensorrt_llm.commands.build \
-          --checkpoint_dir "${checkpoint}" \
+          --checkpoint_dir "$CHECKPOINT_DIR" \
           --output_dir "$out" \
           --gemm_plugin ${gemmPlugin} \
           --max_batch_size ${toString maxBatchSize} \
@@ -199,10 +217,13 @@ print('Checkpoint conversion complete')
           --max_num_tokens ${toString maxNumTokens} \
           --paged_kv_cache enable \
           --use_paged_context_fmha enable \
-          ${extraArgs}
+          ${extraBuildArgs}
 
-        echo "Engine saved to $out"
-        ls -la $out/
+        echo ""
+        echo "════════════════════════════════════════════════════════════════"
+        echo "Engine built successfully!"
+        echo "════════════════════════════════════════════════════════════════"
+        ls -la "$out/"
       '';
 
       meta = {
@@ -211,102 +232,7 @@ print('Checkpoint conversion complete')
     };
 
   # ============================================================================
-  # mkEngineFromHf: Build engine directly from HuggingFace model (for NVFP4 models)
-  # ============================================================================
-  # For pre-quantized models like nvidia/Qwen3-32B-NVFP4, TRT-LLM can build
-  # the engine directly without separate checkpoint conversion
-  mkEngineFromHf =
-    {
-      name,           # e.g. "qwen3-32b-nvfp4"
-      model,          # HuggingFace model ID or local path
-      maxBatchSize ? 8,
-      maxInputLen ? 8192,
-      maxSeqLen ? 16384,
-      maxNumTokens ? 8192,
-      tensorParallelSize ? 1,
-      extraBuildArgs ? "",
-    }:
-    stdenv.mkDerivation {
-      pname = "trtllm-engine-${name}";
-      version = "1.0.0";
-
-      # IMPURE: requires GPU for TensorRT engine compilation
-      __noChroot = true;
-
-      nativeBuildInputs = [ python openmpi cacert ];
-
-      SSL_CERT_FILE = "${cacert}/etc/ssl/certs/ca-bundle.crt";
-
-      buildCommand = ''
-        ${envSetup}
-
-        echo "Building TensorRT engine for ${name} from ${model}..."
-        
-        mkdir -p $out
-
-        # Create Python build script
-        cat > $TMPDIR/build_engine.py << 'PYTHON_EOF'
-import os
-import sys
-
-# Ensure environment is set
-os.environ.setdefault('HF_HOME', os.environ.get('HF_HOME', '/tmp/hf_cache'))
-os.environ.setdefault('TLLM_LOG_LEVEL', 'WARNING')
-
-from tensorrt_llm import LLM, BuildConfig
-
-model_path = "${model}"
-output_dir = os.environ['out']
-tp_size = ${toString tensorParallelSize}
-
-print(f"Building TensorRT engine...")
-print(f"  Model: {model_path}")
-print(f"  Output: {output_dir}")
-print(f"  Tensor parallel size: {tp_size}")
-
-build_config = BuildConfig(
-    max_batch_size=${toString maxBatchSize},
-    max_input_len=${toString maxInputLen},
-    max_seq_len=${toString maxSeqLen},
-    max_num_tokens=${toString maxNumTokens},
-)
-
-llm = LLM(
-    model=model_path,
-    tensor_parallel_size=tp_size,
-    build_config=build_config,
-)
-
-print(f"Saving engine to {output_dir}")
-llm.save(output_dir)
-
-print("Engine build complete")
-print("Contents:", os.listdir(output_dir))
-PYTHON_EOF
-
-        # TRT-LLM requires MPI even for single-GPU operations
-        ${openmpi}/bin/mpirun \
-          -np ${toString tensorParallelSize} \
-          --oversubscribe \
-          --allow-run-as-root \
-          -x LD_LIBRARY_PATH \
-          -x PYTHONPATH \
-          -x CUDA_HOME \
-          -x HOME \
-          -x HF_HOME \
-          -x TLLM_LOG_LEVEL \
-          -x FLASHINFER_WORKSPACE_DIR \
-          -x out \
-          ${python}/bin/python $TMPDIR/build_engine.py
-      '';
-
-      meta = {
-        description = "TensorRT-LLM engine for ${name}";
-      };
-    };
-
-  # ============================================================================
-  # mkTritonRepo: Generate Triton model repository with native tensorrtllm backend
+  # mkTritonRepo: Generate Triton model repository with tensorrtllm backend
   # ============================================================================
   mkTritonRepo =
     {
@@ -320,7 +246,6 @@ PYTHON_EOF
       decodingMode ? "auto",
     }:
     let
-      # Triton config.pbtxt for tensorrtllm backend
       configPbtxt = writeTextFile {
         name = "config.pbtxt";
         text = ''
@@ -338,135 +263,34 @@ PYTHON_EOF
           }
 
           input [
-            {
-              name: "input_ids"
-              data_type: TYPE_INT32
-              dims: [ -1 ]
-            },
-            {
-              name: "input_lengths"
-              data_type: TYPE_INT32
-              dims: [ 1 ]
-              reshape: { shape: [ ] }
-            },
-            {
-              name: "request_output_len"
-              data_type: TYPE_INT32
-              dims: [ 1 ]
-              reshape: { shape: [ ] }
-            },
-            {
-              name: "end_id"
-              data_type: TYPE_INT32
-              dims: [ 1 ]
-              reshape: { shape: [ ] }
-              optional: true
-            },
-            {
-              name: "pad_id"
-              data_type: TYPE_INT32
-              dims: [ 1 ]
-              reshape: { shape: [ ] }
-              optional: true
-            },
-            {
-              name: "streaming"
-              data_type: TYPE_BOOL
-              dims: [ 1 ]
-              reshape: { shape: [ ] }
-              optional: true
-            },
-            {
-              name: "temperature"
-              data_type: TYPE_FP32
-              dims: [ 1 ]
-              reshape: { shape: [ ] }
-              optional: true
-            },
-            {
-              name: "top_p"
-              data_type: TYPE_FP32
-              dims: [ 1 ]
-              reshape: { shape: [ ] }
-              optional: true
-            },
-            {
-              name: "top_k"
-              data_type: TYPE_INT32
-              dims: [ 1 ]
-              reshape: { shape: [ ] }
-              optional: true
-            }
+            { name: "input_ids",        data_type: TYPE_INT32, dims: [ -1 ] },
+            { name: "input_lengths",    data_type: TYPE_INT32, dims: [ 1 ], reshape: { shape: [ ] } },
+            { name: "request_output_len", data_type: TYPE_INT32, dims: [ 1 ], reshape: { shape: [ ] } },
+            { name: "end_id",           data_type: TYPE_INT32, dims: [ 1 ], reshape: { shape: [ ] }, optional: true },
+            { name: "pad_id",           data_type: TYPE_INT32, dims: [ 1 ], reshape: { shape: [ ] }, optional: true },
+            { name: "streaming",        data_type: TYPE_BOOL,  dims: [ 1 ], reshape: { shape: [ ] }, optional: true },
+            { name: "temperature",      data_type: TYPE_FP32,  dims: [ 1 ], reshape: { shape: [ ] }, optional: true },
+            { name: "top_p",            data_type: TYPE_FP32,  dims: [ 1 ], reshape: { shape: [ ] }, optional: true },
+            { name: "top_k",            data_type: TYPE_INT32, dims: [ 1 ], reshape: { shape: [ ] }, optional: true }
           ]
 
           output [
-            {
-              name: "output_ids"
-              data_type: TYPE_INT32
-              dims: [ -1, -1 ]
-            },
-            {
-              name: "sequence_length"
-              data_type: TYPE_INT32
-              dims: [ -1 ]
-            },
-            {
-              name: "cum_log_probs"
-              data_type: TYPE_FP32
-              dims: [ -1 ]
-            },
-            {
-              name: "output_log_probs"
-              data_type: TYPE_FP32
-              dims: [ -1, -1 ]
-            }
+            { name: "output_ids",       data_type: TYPE_INT32, dims: [ -1, -1 ] },
+            { name: "sequence_length",  data_type: TYPE_INT32, dims: [ -1 ] },
+            { name: "cum_log_probs",    data_type: TYPE_FP32,  dims: [ -1 ] },
+            { name: "output_log_probs", data_type: TYPE_FP32,  dims: [ -1, -1 ] }
           ]
 
           instance_group [
-            {
-              count: 1
-              kind: KIND_CPU
-            }
+            { count: 1, kind: KIND_CPU }
           ]
 
-          parameters: {
-            key: "gpt_model_type"
-            value: {
-              string_value: "inflight_fused_batching"
-            }
-          }
-          parameters: {
-            key: "gpt_model_path"
-            value: {
-              string_value: "ENGINE_PATH_PLACEHOLDER"
-            }
-          }
-          parameters: {
-            key: "batch_scheduler_policy"
-            value: {
-              string_value: "${batchSchedulerPolicy}"
-            }
-          }
-          parameters: {
-            key: "kv_cache_free_gpu_mem_fraction"
-            value: {
-              string_value: "${toString kvCacheFreeGpuMemFraction}"
-            }
-          }
-          ${lib.optionalString enableChunkedContext ''
-          parameters: {
-            key: "enable_chunked_context"
-            value: {
-              string_value: "true"
-            }
-          }
-          ''}
-          parameters: {
-            key: "decoding_mode"
-            value: {
-              string_value: "${decodingMode}"
-            }
-          }
+          parameters: { key: "gpt_model_type",                value: { string_value: "inflight_fused_batching" } }
+          parameters: { key: "gpt_model_path",                value: { string_value: "ENGINE_PATH_PLACEHOLDER" } }
+          parameters: { key: "batch_scheduler_policy",        value: { string_value: "${batchSchedulerPolicy}" } }
+          parameters: { key: "kv_cache_free_gpu_mem_fraction", value: { string_value: "${toString kvCacheFreeGpuMemFraction}" } }
+          ${lib.optionalString enableChunkedContext ''parameters: { key: "enable_chunked_context", value: { string_value: "true" } }''}
+          parameters: { key: "decoding_mode",                 value: { string_value: "${decodingMode}" } }
         '';
       };
     in
@@ -497,6 +321,7 @@ PYTHON_EOF
       httpPort ? 8000,
       grpcPort ? 8001,
       metricsPort ? 8002,
+      worldSize ? 1,  # For multi-GPU: number of GPUs
     }:
     writeShellApplication {
       name = "tritonserver-${name}";
@@ -504,16 +329,57 @@ PYTHON_EOF
       text = ''
         export LD_LIBRARY_PATH="/run/opengl-driver/lib:${triton}/lib:${triton}/tensorrt_llm/lib:${cuda}/lib64:${openmpi}/lib''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 
+        ${if worldSize > 1 then ''
+        # Multi-GPU: launch with mpirun
+        exec mpirun -np ${toString worldSize} --allow-run-as-root \
+          ${triton}/bin/tritonserver \
+            --model-repository=${repo} \
+            --http-port=${toString httpPort} \
+            --grpc-port=${toString grpcPort} \
+            --metrics-port=${toString metricsPort} \
+            "$@"
+        '' else ''
         exec ${triton}/bin/tritonserver \
           --model-repository=${repo} \
           --http-port=${toString httpPort} \
           --grpc-port=${toString grpcPort} \
           --metrics-port=${toString metricsPort} \
           "$@"
+        ''}
       '';
       meta = {
         description = "Triton Inference Server for ${name}";
         mainProgram = "tritonserver-${name}";
+      };
+    };
+
+  # ============================================================================
+  # Convenience: buildQwen - build engine for Qwen-family models
+  # ============================================================================
+  buildQwen =
+    {
+      name,
+      hfModel,
+      tensorParallelSize ? 1,
+      ...
+    }@args:
+    let
+      engineArgs = builtins.removeAttrs args [ "name" "hfModel" ];
+      engine = mkEngine ({
+        inherit name hfModel;
+        modelType = "qwen";
+      } // engineArgs);
+      tritonRepo = mkTritonRepo {
+        inherit name engine;
+        tokenizer = hfModel;
+      };
+    in
+    {
+      inherit engine tritonRepo;
+      server = mkTritonServer {
+        inherit name;
+        repo = tritonRepo;
+        worldSize = tensorParallelSize;
       };
     };
 }
