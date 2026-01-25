@@ -303,38 +303,188 @@ EOF
     };
 
   # ============================================================================
-  # mkOpenAIServer: OpenAI-compatible server with streaming (for OpenWebUI)
-  # Uses the Python backend with our custom model that wraps TRT-LLM LLM API
-  # Plus the Triton OpenAI frontend for /v1/chat/completions
+  # mkOpenAIProxy: OpenAI-compatible proxy for an existing Triton server
+  # Connects to a running mkTritonServer instance (text_input/text_output API)
   # ============================================================================
-  mkOpenAIServer =
+  mkOpenAIProxy =
     {
       # Required
-      name,           # e.g. "phi4" (server will be openai-${name})
-      model,          # HuggingFace model ID
+      name,           # e.g. "phi4" (proxy will be openai-${name})
+      model,          # HuggingFace model ID (for tokenizer/chat template)
       
       # Optional
-      description ? "OpenAI-compatible server for ${model}",
-      openaiPort ? 8000,        # OpenAI API port (/v1/chat/completions, etc.)
-      tritonHttpPort ? 8080,    # Triton HTTP port (for native /v2/ API)
-      tritonGrpcPort ? 8081,    # Triton gRPC port
-      metricsPort ? 8082,
-      defaultMaxTokens ? 256,
+      description ? "OpenAI proxy for ${model}",
+      openaiPort ? 9000,
+      tritonUrl ? "http://localhost:8000",
+      tritonModelName ? name,
+      defaultMaxTokens ? 2048,
       defaultTemperature ? 0.7,
       defaultTopP ? 0.9,
-      tensorParallelSize ? 1,
     }:
     let
       serverName = "openai-${name}";
       
-      # Python model that wraps TRT-LLM LLM API with streaming support
+      proxyPy = writeTextFile {
+        name = "openai_proxy.py";
+        text = ''
+#!/usr/bin/env python3
+"""OpenAI proxy for Triton (text_input/text_output models)."""
+import argparse, json, time, uuid
+from typing import AsyncGenerator, Optional
+import aiohttp, uvicorn
+from fastapi import FastAPI, HTTPException
+from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
+from transformers import AutoTokenizer
+
+class ChatMessage(BaseModel):
+    role: str
+    content: str
+
+class ChatCompletionRequest(BaseModel):
+    model: str
+    messages: list[ChatMessage]
+    temperature: Optional[float] = ${toString defaultTemperature}
+    top_p: Optional[float] = ${toString defaultTopP}
+    max_tokens: Optional[int] = ${toString defaultMaxTokens}
+    stream: Optional[bool] = False
+
+class CompletionRequest(BaseModel):
+    model: str
+    prompt: str
+    temperature: Optional[float] = ${toString defaultTemperature}
+    top_p: Optional[float] = ${toString defaultTopP}
+    max_tokens: Optional[int] = ${toString defaultMaxTokens}
+    stream: Optional[bool] = False
+
+class TritonProxy:
+    def __init__(self, triton_url: str, model_name: str, tokenizer_name: str):
+        self.triton_url = triton_url.rstrip("/")
+        self.model_name = model_name
+        self.infer_url = f"{self.triton_url}/v2/models/{model_name}/infer"
+        self.created = int(time.time())
+        print(f"Loading tokenizer: {tokenizer_name}")
+        self.tokenizer = AutoTokenizer.from_pretrained(tokenizer_name, trust_remote_code=True)
+
+    def apply_chat_template(self, messages: list[ChatMessage]) -> str:
+        msg_dicts = [{"role": m.role, "content": m.content} for m in messages]
+        try:
+            return self.tokenizer.apply_chat_template(msg_dicts, tokenize=False, add_generation_prompt=True)
+        except:
+            return "\n".join(f"{m.role}: {m.content}" for m in messages) + "\nassistant:"
+
+    async def generate(self, text: str, max_tokens: int, temperature: float, top_p: float) -> str:
+        payload = {
+            "inputs": [
+                {"name": "text_input", "shape": [1], "datatype": "BYTES", "data": [text]},
+                {"name": "max_tokens", "shape": [1], "datatype": "INT32", "data": [max_tokens]},
+                {"name": "temperature", "shape": [1], "datatype": "FP32", "data": [temperature]},
+                {"name": "top_p", "shape": [1], "datatype": "FP32", "data": [top_p]},
+            ],
+            "outputs": [{"name": "text_output"}]
+        }
+        async with aiohttp.ClientSession() as session:
+            async with session.post(self.infer_url, json=payload) as resp:
+                if resp.status != 200:
+                    raise HTTPException(status_code=resp.status, detail=await resp.text())
+                data = await resp.json()
+                for out in data.get("outputs", []):
+                    if out.get("name") == "text_output":
+                        return out.get("data", [""])[0]
+                return ""
+
+def create_app(proxy: TritonProxy) -> FastAPI:
+    app = FastAPI(title="OpenAI Proxy - ${name}")
+
+    @app.get("/health")
+    async def health():
+        return {"status": "ok"}
+
+    @app.get("/v1/models")
+    async def list_models():
+        return {"object": "list", "data": [{"id": "${name}", "object": "model", "created": proxy.created, "owned_by": "nvidia"}]}
+
+    @app.post("/v1/chat/completions")
+    async def chat_completions(request: ChatCompletionRequest):
+        prompt = proxy.apply_chat_template(request.messages)
+        request_id = f"chatcmpl-{uuid.uuid4().hex[:8]}"
+        text = await proxy.generate(prompt, request.max_tokens or ${toString defaultMaxTokens}, request.temperature or ${toString defaultTemperature}, request.top_p or ${toString defaultTopP})
+        return {"id": request_id, "object": "chat.completion", "created": int(time.time()), "model": request.model,
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": text}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": -1, "completion_tokens": -1, "total_tokens": -1}}
+
+    @app.post("/v1/completions")
+    async def completions(request: CompletionRequest):
+        request_id = f"cmpl-{uuid.uuid4().hex[:8]}"
+        text = await proxy.generate(request.prompt, request.max_tokens or ${toString defaultMaxTokens}, request.temperature or ${toString defaultTemperature}, request.top_p or ${toString defaultTopP})
+        return {"id": request_id, "object": "text_completion", "created": int(time.time()), "model": request.model,
+                "choices": [{"index": 0, "text": text, "finish_reason": "stop"}], "usage": {"prompt_tokens": -1, "completion_tokens": -1, "total_tokens": -1}}
+
+    return app
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--port", type=int, default=${toString openaiPort})
+    parser.add_argument("--triton-url", type=str, default="${tritonUrl}")
+    parser.add_argument("--model-name", type=str, default="${tritonModelName}")
+    parser.add_argument("--tokenizer", type=str, default="${model}")
+    args = parser.parse_args()
+    proxy = TritonProxy(args.triton_url, args.model_name, args.tokenizer)
+    uvicorn.run(create_app(proxy), host="0.0.0.0", port=args.port, log_level="info")
+
+if __name__ == "__main__":
+    main()
+'';
+      };
+    in
+    writeShellApplication {
+      name = serverName;
+      runtimeInputs = [ python ];
+      text = ''
+        cat <<EOF
+╔══════════════════════════════════════════════════════════════════╗
+║  OpenAI Proxy: ${name}
+║  Backend: ${tritonUrl}/v2/models/${tritonModelName}
+╠══════════════════════════════════════════════════════════════════╣
+║  http://localhost:${toString openaiPort}/v1/chat/completions
+║  http://localhost:${toString openaiPort}/v1/models
+╠══════════════════════════════════════════════════════════════════╣
+║  OpenWebUI: Base URL = http://localhost:${toString openaiPort}/v1
+╚══════════════════════════════════════════════════════════════════╝
+EOF
+        ${envSetup}
+        exec ${python}/bin/python ${proxyPy} "$@"
+      '';
+      meta = { inherit description; mainProgram = serverName; };
+    };
+
+  # ============================================================================
+  # mkOpenAIServer: Self-contained OpenAI server (Triton + proxy)
+  # Uses the Python backend with tensorrt_llm.LLM API (text_input/text_output)
+  # ============================================================================
+  mkOpenAIServer =
+    {
+      name,
+      model,
+      description ? "OpenAI server for ${model}",
+      httpPort ? 8000,
+      grpcPort ? 8001,
+      metricsPort ? 8002,
+      openaiPort ? 9000,
+      defaultMaxTokens ? 2048,
+      defaultTemperature ? 0.7,
+      defaultTopP ? 0.9,
+      tensorParallelSize ? 1,
+      maxBatchSize ? 8,
+      stubTimeoutSeconds ? 600,
+    }:
+    let
+      serverName = "openai-${name}";
+      
+      # Python backend model using TRT-LLM LLM API
       modelPy = writeTextFile {
         name = "model.py";
         text = ''
-"""
-${model} via TensorRT-LLM LLM API with streaming support.
-Auto-generated by trtllm-runner.nix for OpenAI compatibility.
-"""
 import json
 import numpy as np
 import triton_python_backend_utils as pb_utils
@@ -342,13 +492,15 @@ import triton_python_backend_utils as pb_utils
 class TritonPythonModel:
     def initialize(self, args):
         self.model_config = json.loads(args["model_config"])
+        params = self.model_config.get("parameters", {})
+        model_name = params.get("model", {}).get("string_value", "${model}")
+        tp_size = int(params.get("tensor_parallel_size", {}).get("string_value", "${toString tensorParallelSize}"))
         
         from tensorrt_llm import LLM, SamplingParams
-        
-        print(f"[${name}] Loading: ${model}")
-        self.llm = LLM(model="${model}", tensor_parallel_size=${toString tensorParallelSize})
+        print(f"[${name}] Loading: {model_name}, TP={tp_size}")
+        self.llm = LLM(model=model_name, tensor_parallel_size=tp_size)
         self.SamplingParams = SamplingParams
-        print(f"[${name}] Ready for inference")
+        print(f"[${name}] Ready")
 
     def execute(self, requests):
         responses = []
@@ -356,27 +508,18 @@ class TritonPythonModel:
             text_input = pb_utils.get_input_tensor_by_name(request, "text_input")
             prompts = [t.decode("utf-8") for t in text_input.as_numpy().flatten()]
             
-            max_tokens = self._get_scalar(request, "max_tokens", ${toString defaultMaxTokens})
-            temperature = self._get_scalar(request, "temperature", ${toString defaultTemperature})
-            top_p = self._get_scalar(request, "top_p", ${toString defaultTopP})
+            def get_scalar(name, default):
+                t = pb_utils.get_input_tensor_by_name(request, name)
+                return t.as_numpy().flatten()[0] if t else default
             
-            sampling_params = self.SamplingParams(
-                max_tokens=int(max_tokens),
-                temperature=float(temperature),
-                top_p=float(top_p),
-            )
-            
-            outputs = self.llm.generate(prompts, sampling_params)
+            outputs = self.llm.generate(prompts, self.SamplingParams(
+                max_tokens=int(get_scalar("max_tokens", ${toString defaultMaxTokens})),
+                temperature=float(get_scalar("temperature", ${toString defaultTemperature})),
+                top_p=float(get_scalar("top_p", ${toString defaultTopP})),
+            ))
             results = [out.outputs[0].text for out in outputs]
-            
-            out_tensor = pb_utils.Tensor("text_output", np.array(results, dtype=object))
-            responses.append(pb_utils.InferenceResponse([out_tensor]))
-        
+            responses.append(pb_utils.InferenceResponse([pb_utils.Tensor("text_output", np.array(results, dtype=object))]))
         return responses
-
-    def _get_scalar(self, request, name, default):
-        tensor = pb_utils.get_input_tensor_by_name(request, name)
-        return tensor.as_numpy().flatten()[0] if tensor else default
 
     def finalize(self):
         print(f"[${name}] Shutting down")
@@ -384,13 +527,12 @@ class TritonPythonModel:
 '';
       };
 
-      # Triton config.pbtxt - using Python backend
       configPbtxt = writeTextFile {
         name = "config.pbtxt";
         text = ''
 name: "${name}"
 backend: "python"
-max_batch_size: 8
+max_batch_size: ${toString maxBatchSize}
 
 input [
   { name: "text_input", data_type: TYPE_STRING, dims: [ -1 ] },
@@ -404,81 +546,139 @@ output [
 ]
 
 instance_group [{ count: 1, kind: KIND_GPU, gpus: [ 0 ] }]
-
+parameters { key: "model", value: { string_value: "${model}" } }
+parameters { key: "tensor_parallel_size", value: { string_value: "${toString tensorParallelSize}" } }
 dynamic_batching { max_queue_delay_microseconds: 100000 }
 '';
       };
 
+      proxyPy = writeTextFile {
+        name = "openai_proxy.py";
+        text = ''
+#!/usr/bin/env python3
+import argparse, json, time, uuid
+from typing import Optional
+import aiohttp, uvicorn
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
+from transformers import AutoTokenizer
+
+class ChatMessage(BaseModel):
+    role: str
+    content: str
+
+class ChatCompletionRequest(BaseModel):
+    model: str
+    messages: list[ChatMessage]
+    temperature: Optional[float] = ${toString defaultTemperature}
+    top_p: Optional[float] = ${toString defaultTopP}
+    max_tokens: Optional[int] = ${toString defaultMaxTokens}
+    stream: Optional[bool] = False
+
+class TritonProxy:
+    def __init__(self, triton_url: str, model_name: str, tokenizer_name: str):
+        self.infer_url = f"{triton_url.rstrip('/')}/v2/models/{model_name}/infer"
+        self.created = int(time.time())
+        self.tokenizer = AutoTokenizer.from_pretrained(tokenizer_name, trust_remote_code=True)
+
+    def apply_chat_template(self, messages):
+        try:
+            return self.tokenizer.apply_chat_template([{"role": m.role, "content": m.content} for m in messages], tokenize=False, add_generation_prompt=True)
+        except:
+            return "\n".join(f"{m.role}: {m.content}" for m in messages) + "\nassistant:"
+
+    async def generate(self, text, max_tokens, temperature, top_p):
+        payload = {"inputs": [{"name": "text_input", "shape": [1], "datatype": "BYTES", "data": [text]},
+                              {"name": "max_tokens", "shape": [1], "datatype": "INT32", "data": [max_tokens]},
+                              {"name": "temperature", "shape": [1], "datatype": "FP32", "data": [temperature]},
+                              {"name": "top_p", "shape": [1], "datatype": "FP32", "data": [top_p]}],
+                   "outputs": [{"name": "text_output"}]}
+        async with aiohttp.ClientSession() as session:
+            async with session.post(self.infer_url, json=payload) as resp:
+                if resp.status != 200:
+                    raise HTTPException(status_code=resp.status, detail=await resp.text())
+                data = await resp.json()
+                for out in data.get("outputs", []):
+                    if out.get("name") == "text_output":
+                        return out.get("data", [""])[0]
+                return ""
+
+def create_app(proxy):
+    app = FastAPI(title="${name}")
+    @app.get("/health")
+    async def health(): return {"status": "ok"}
+    @app.get("/v1/models")
+    async def models(): return {"object": "list", "data": [{"id": "${name}", "object": "model", "created": proxy.created, "owned_by": "nvidia"}]}
+    @app.post("/v1/chat/completions")
+    async def chat(request: ChatCompletionRequest):
+        text = await proxy.generate(proxy.apply_chat_template(request.messages), request.max_tokens or ${toString defaultMaxTokens}, request.temperature or ${toString defaultTemperature}, request.top_p or ${toString defaultTopP})
+        return {"id": f"chatcmpl-{uuid.uuid4().hex[:8]}", "object": "chat.completion", "created": int(time.time()), "model": request.model,
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": text}, "finish_reason": "stop"}], "usage": {"prompt_tokens": -1, "completion_tokens": -1, "total_tokens": -1}}
+    return app
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--port", type=int, default=${toString openaiPort})
+    parser.add_argument("--triton-url", default="http://localhost:${toString httpPort}")
+    parser.add_argument("--model-name", default="${name}")
+    parser.add_argument("--tokenizer", default="${model}")
+    args = parser.parse_args()
+    uvicorn.run(create_app(TritonProxy(args.triton_url, args.model_name, args.tokenizer)), host="0.0.0.0", port=args.port, log_level="info")
+'';
+      };
     in
     writeShellApplication {
       name = serverName;
       runtimeInputs = [ python openmpi ];
       text = ''
         set -euo pipefail
-
         MODEL_REPO="''${XDG_RUNTIME_DIR:-/tmp}/openai-${name}-repo"
-        
         rm -rf "$MODEL_REPO"
         mkdir -p "$MODEL_REPO/${name}/1"
         cp ${configPbtxt} "$MODEL_REPO/${name}/config.pbtxt"
         cp ${modelPy} "$MODEL_REPO/${name}/1/model.py"
 
         cat <<EOF
-
 ╔══════════════════════════════════════════════════════════════════╗
-║  OpenAI-Compatible Server: ${name}
+║  OpenAI Server: ${name}
 ║  Model: ${model}
 ╠══════════════════════════════════════════════════════════════════╣
-║  OpenAI API:
-║    http://localhost:${toString openaiPort}/v1/chat/completions
-║    http://localhost:${toString openaiPort}/v1/completions  
-║    http://localhost:${toString openaiPort}/v1/models
-║
-║  Triton Native API:
-║    http://localhost:${toString tritonHttpPort}/v2/models/${name}/infer
+║  OpenAI: http://localhost:${toString openaiPort}/v1/chat/completions
+║  Triton: http://localhost:${toString httpPort}/v2/models/${name}/infer
 ╠══════════════════════════════════════════════════════════════════╣
-║  OpenWebUI Configuration:
-║    Provider: OpenAI
-║    Base URL: http://localhost:${toString openaiPort}/v1
-║    API Key:  any-value-works
-╠══════════════════════════════════════════════════════════════════╣
-║  Test:
-║    curl -s http://localhost:${toString openaiPort}/v1/chat/completions \\
-║      -H "Content-Type: application/json" \\
-║      -d '{"model":"${name}","messages":[{"role":"user","content":"Hello!"}]}'
+║  OpenWebUI: Base URL = http://localhost:${toString openaiPort}/v1
 ╚══════════════════════════════════════════════════════════════════╝
-
 EOF
-
         ${envSetup}
         
-        # Add openai_frontend to path
-        export PYTHONPATH="${triton}/python/openai/openai_frontend''${PYTHONPATH:+:$PYTHONPATH}"
+        # Start Triton in background (no exec since we need to run more commands)
+        mpirun -np 1 --oversubscribe --allow-run-as-root \
+          ${triton}/bin/tritonserver \
+            --model-repository="$MODEL_REPO" \
+            --backend-directory="${triton}/backends" \
+            --backend-config=python,stub-timeout-seconds=${toString stubTimeoutSeconds} \
+            --http-port=${toString httpPort} \
+            --grpc-port=${toString grpcPort} \
+            --metrics-port=${toString metricsPort} \
+            --log-verbose=1 &
+        TRITON_PID=$!
         
-        # The tritonserver Python API defaults to /opt/tritonserver/backends
-        sudo mkdir -p /opt/tritonserver 2>/dev/null || mkdir -p /opt/tritonserver 2>/dev/null || true
-        if [[ ! -e /opt/tritonserver/backends ]]; then
-          sudo ln -sf ${triton}/backends /opt/tritonserver/backends 2>/dev/null || \
-            ln -sf ${triton}/backends /opt/tritonserver/backends 2>/dev/null || true
-        fi
+        # Wait for ready
+        for _ in {1..120}; do
+          curl -sf http://localhost:${toString httpPort}/v2/health/ready >/dev/null 2>&1 && break
+          sleep 1
+        done
+        echo "Triton ready, starting proxy..."
         
-        exec ${python}/bin/python ${triton}/python/openai/openai_frontend/main.py \
-          --model-repository="$MODEL_REPO" \
-          --tokenizer="${model}" \
-          --backend=tensorrtllm \
-          --openai-port=${toString openaiPort} \
-          --default-max-tokens=${toString defaultMaxTokens} \
-          --enable-kserve-frontends \
-          --kserve-http-port=${toString tritonHttpPort} \
-          --kserve-grpc-port=${toString tritonGrpcPort} \
-          "$@"
+        # Start proxy
+        ${python}/bin/python ${proxyPy} &
+        PROXY_PID=$!
+        
+        trap 'kill $PROXY_PID $TRITON_PID 2>/dev/null' EXIT
+        wait $TRITON_PID
       '';
-      meta = {
-        inherit description;
-        mainProgram = serverName;
-      };
+      meta = { inherit description; mainProgram = serverName; };
     };
-
   # ============================================================================
   # mkCheck: Create a flake check that verifies a runner can at least parse
   # ============================================================================

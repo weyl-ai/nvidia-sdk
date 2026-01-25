@@ -296,6 +296,30 @@ in
       default = false;
       description = "Enable NVIDIA power management (for laptops)";
     };
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # MPI / TensorRT-LLM Support
+    # ──────────────────────────────────────────────────────────────────────────
+
+    mpi.enable = lib.mkOption {
+      type = lib.types.bool;
+      default = false;
+      description = ''
+        Enable OpenMPI with PRTE daemon for TensorRT-LLM support.
+        
+        TensorRT-LLM's LLM API uses MpiPoolSession which internally calls
+        MPI_Comm_spawn to create worker processes. This requires the PRTE
+        (PMIx Reference RunTime Environment) daemon to be running.
+        
+        Without this, TRT-LLM hangs at "rank 0 using MpiPoolSession to spawn
+        MPI processes" because MPI_Comm_spawn fails silently.
+        
+        Enable this if you're using:
+        - TensorRT-LLM's Python LLM API
+        - Triton Inference Server with TRT-LLM backend
+        - Any application that uses MPI_Comm_spawn for dynamic process spawning
+      '';
+    };
   };
 
   # ══════════════════════════════════════════════════════════════════════════
@@ -332,10 +356,12 @@ in
     };
 
     # ──────────────────────────────────────────────────────────────────────────
-    # CUDA System Packages
+    # System Packages (CUDA + MPI)
     # ──────────────────────────────────────────────────────────────────────────
 
-    environment.systemPackages = lib.mkIf cfg.systemPackages [ cudaPackage ];
+    environment.systemPackages =
+      lib.optionals cfg.systemPackages [ cudaPackage ]
+      ++ lib.optionals cfg.mpi.enable [ pkgs.openmpi pkgs.prrte ];
 
     environment.variables = lib.mkIf (cfg.systemPackages && cfg.environmentVariables) {
       CUDA_PATH = "${cudaPackage}";
@@ -399,6 +425,42 @@ in
     };
 
     # ──────────────────────────────────────────────────────────────────────────
+    # MPI / PRTE Daemon (for TensorRT-LLM)
+    # ──────────────────────────────────────────────────────────────────────────
+    #
+    # PRTE (PMIx Reference RunTime Environment) is required for MPI_Comm_spawn
+    # to work from non-mpirun contexts. TensorRT-LLM's LLM API uses this
+    # internally via MpiPoolSession.
+
+    systemd.services.prte = lib.mkIf cfg.mpi.enable {
+      description = "PMIx Reference Runtime Environment Daemon";
+      documentation = [ "man:prte(1)" "https://openpmix.github.io/prrte/" ];
+      wantedBy = [ "multi-user.target" ];
+      after = [ "network.target" ];
+
+      serviceConfig = {
+        Type = "forking";
+        ExecStart = "${pkgs.prrte}/bin/prte --daemonize --system-server";
+        ExecStop = "${pkgs.prrte}/bin/pterm";
+        Restart = "on-failure";
+        RestartSec = "5s";
+
+        # Run as root to allow spawning processes for any user
+        User = "root";
+        Group = "root";
+
+        # Runtime directory for PRTE state
+        RuntimeDirectory = "prte";
+        RuntimeDirectoryMode = "0755";
+      };
+
+      environment = {
+        # Ensure PRTE can find OpenMPI libraries
+        LD_LIBRARY_PATH = lib.makeLibraryPath [ pkgs.openmpi pkgs.prrte ];
+      };
+    };
+
+    # ──────────────────────────────────────────────────────────────────────────
     # Metadata
     # ──────────────────────────────────────────────────────────────────────────
 
@@ -407,6 +469,7 @@ in
       driver: ${nvidiaDriver.version or "unknown"}
       open: ${lib.boolToString cfg.open}
       fhs: ${if cfg.fhs.enable then cfg.fhs.path else "disabled"}
+      mpi: ${lib.boolToString cfg.mpi.enable}
     '';
 
     # ──────────────────────────────────────────────────────────────────────────

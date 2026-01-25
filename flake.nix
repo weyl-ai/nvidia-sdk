@@ -160,6 +160,13 @@
                 # OpenAI-compatible (OpenWebUI)
                 openai-phi4
                 openai-qwen3
+
+                # Native TRT-LLM engines (C++ backend, impure builds)
+                # Build with: nix build .#qwen3-32b-engine --option sandbox false
+                qwen3-32b-engine
+                qwen3-32b-triton-repo
+                qwen3-32b-hf-model
+                tritonserver-qwen3-native
                 ;
               # Expose patched LLVM for testing
               clang-sm120 = pkgs'.llvmPackages_20.clang;
@@ -492,6 +499,13 @@
               program = "${pkgs'.openai-qwen3}/bin/openai-qwen3";
               meta.description = "OpenAI API: Qwen3-32B FP4 (streaming, OpenWebUI)";
             };
+
+            # Native TRT-LLM engine apps (require impure build first)
+            # tritonserver-qwen3-native = {
+            #   type = "app";
+            #   program = "${pkgs'.tritonserver-qwen3-native}/bin/tritonserver-qwen3-native";
+            #   meta.description = "Triton: Qwen3-32B native C++ backend (pre-built engine)";
+            # };
           };
         };
 
@@ -811,10 +825,16 @@
               cutensor = final.cutensor;
             };
 
-            # TensorRT-LLM runner library
+            # TensorRT-LLM runner library (Python API - runtime engine build)
             trtllm = final.callPackage ./nix/trtllm-runner.nix {
               tritonserver-trtllm = final.tritonserver-trtllm;
               inherit triton-trtllm-container;
+              cuda = final.cuda;
+            };
+
+            # TensorRT-LLM engine builder (C++ native - build-time engine)
+            trtllm-engine = final.callPackage ./nix/trtllm-engine.nix {
+              tritonserver-trtllm = final.tritonserver-trtllm;
               cuda = final.cuda;
             };
 
@@ -882,11 +902,61 @@ def format_prompt(text, thinking=False):
               name = "qwen3";
               model = "nvidia/Qwen3-32B-NVFP4";
               description = "OpenAI API: Qwen3 32B FP4 (streaming, OpenWebUI)";
+              # Use alternate ports to avoid conflict with existing Triton on 8000
+              httpPort = 8100;
+              grpcPort = 8101;
+              metricsPort = 8102;
+              openaiPort = 9100;
             };
 
             # Qwen3-TTS runner (VoiceDesign model, uses PyTorch nightly for SM120)
             qwen3-tts-runner = final.callPackage ./nix/qwen3-tts-runner.nix {
               cuda = final.cuda;
+            };
+
+            # ══════════════════════════════════════════════════════════════════════
+            # Native TensorRT-LLM Engines (C++ backend, build-time engine compilation)
+            # ══════════════════════════════════════════════════════════════════════
+            # NOTE: These are IMPURE builds that require GPU access (__noChroot = true)
+            # Build with: nix build .#qwen3-32b-engine --option sandbox false
+
+            # Qwen3-32B-NVFP4 TensorRT engine (pre-built)
+            # Uses the locally downloaded HF model to avoid network access during build
+            qwen3-32b-engine = final.trtllm-engine.mkEngineFromHf {
+              name = "qwen3-32b-nvfp4";
+              model = final.qwen3-32b-hf-model;  # Use local model, not HF ID
+              maxBatchSize = 8;
+              maxInputLen = 8192;
+              maxSeqLen = 16384;
+              maxNumTokens = 8192;
+              tensorParallelSize = 1;  # Single GPU
+            };
+
+            # Qwen3-32B Triton model repository (native tensorrtllm backend)
+            qwen3-32b-triton-repo = final.trtllm-engine.mkTritonRepo {
+              name = "qwen3-32b";
+              engine = final.qwen3-32b-engine;
+              tokenizer = final.qwen3-32b-hf-model;
+              maxBatchSize = 8;
+              kvCacheFreeGpuMemFraction = 0.9;
+              enableChunkedContext = true;
+            };
+
+            # Qwen3-32B HuggingFace model download (FOD)
+            # NOTE: You must provide the correct hash after first download attempt
+            qwen3-32b-hf-model = final.trtllm-engine.mkHfModel {
+              name = "qwen3-32b-nvfp4";
+              model = "nvidia/Qwen3-32B-NVFP4";
+              hash = "sha256-Uekvo4NlzbrbZcKPSyzd7opvZDh+JOE55jrUbcsMu8Q=";
+            };
+
+            # Triton server wrapper for native Qwen3 engine
+            tritonserver-qwen3-native = final.trtllm-engine.mkTritonServer {
+              name = "qwen3-native";
+              repo = final.qwen3-32b-triton-repo;
+              httpPort = 8000;
+              grpcPort = 8001;
+              metricsPort = 8002;
             };
 
             # Example packages to demonstrate SDK functionality
