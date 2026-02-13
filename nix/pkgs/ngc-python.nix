@@ -36,13 +36,15 @@ let
   python = python312;
 
   # PyCUDA - build from source since no wheels available
-  pycuda = python.pkgs.buildPythonPackage rec {
+  pycudaVersion = "2026.1";
+  pycuda = python.pkgs.buildPythonPackage {
     pname = "pycuda";
-    version = "2026.1";
+    version = pycudaVersion;
     format = "setuptools";
 
     src = fetchPypi {
-      inherit pname version;
+      pname = "pycuda";
+      version = pycudaVersion;
       hash = "sha256-dZUWFgYougbzLOflY+P1uSFGkdyVKKA+qZ6hBz9OFLo=";
     };
 
@@ -383,6 +385,9 @@ stdenv.mkDerivation {
 
   meta = {
     description = "Python ${python.version} with NGC container packages (torch, triton, tensorrt_llm)";
+    homepage = "https://catalog.ngc.nvidia.com";
+    # NGC container extraction includes proprietary components (TensorRT-LLM, cuDNN, etc.)
+    license = lib.licenses.unfree;
     platforms = [ "x86_64-linux" "aarch64-linux" ];
     mainProgram = "python3";
   };

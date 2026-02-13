@@ -80,10 +80,11 @@
 let
   python = python312;
 
-  libxml2-legacy = libxml2.overrideAttrs (_: rec {
-    version = "2.9.14";
+  libxml2LegacyVersion = "2.9.14";
+  libxml2-legacy = libxml2.overrideAttrs (_: {
+    version = libxml2LegacyVersion;
     src = fetchurl {
-      url = "https://download.gnome.org/sources/libxml2/${lib.versions.majorMinor version}/libxml2-${version}.tar.xz";
+      url = "https://download.gnome.org/sources/libxml2/${lib.versions.majorMinor libxml2LegacyVersion}/libxml2-${libxml2LegacyVersion}.tar.xz";
       sha256 = "sha256-YNdKJX0czsBHXnScui8hVZ5IE577pv8oIkNXx8eY3+4=";
     };
   });
@@ -358,7 +359,8 @@ stdenv.mkDerivation {
   meta = {
     description = "NVIDIA Triton Inference Server with TensorRT-LLM ${version}";
     homepage = "https://developer.nvidia.com/nvidia-triton-inference-server";
-    license = lib.licenses.bsd3;
+    # NGC container extraction includes proprietary components (TensorRT-LLM, cuDNN, etc.)
+    license = lib.licenses.unfree;
     platforms = [ "x86_64-linux" "aarch64-linux" ];
     mainProgram = "tritonserver";
   };

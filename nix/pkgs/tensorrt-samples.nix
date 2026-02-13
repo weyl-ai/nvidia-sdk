@@ -11,9 +11,12 @@
   versions,
 }:
 
-stdenv.mkDerivation rec {
-  pname = "tensorrt-samples";
+let
   version = "10.14";
+in
+stdenv.mkDerivation {
+  pname = "tensorrt-samples";
+  inherit version;
 
   src = fetchFromGitHub {
     owner = "NVIDIA";

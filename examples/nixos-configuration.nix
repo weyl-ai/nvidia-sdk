@@ -64,13 +64,13 @@
   # Additional packages from overlay (optional)
   # ════════════════════════════════════════════════════════════════════════════
 
-  environment.systemPackages = with pkgs; [
+  environment.systemPackages = [
     # Development
-    cuda-samples
-    cutlass
+    pkgs.cuda-samples
+    pkgs.cutlass
 
     # Profiling (GUI)
-    nsight-gui-apps
+    pkgs.nsight-gui-apps
   ];
 }
 

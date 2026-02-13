@@ -47,6 +47,8 @@ EOF
 
     meta = {
       description = "GPU monitoring tools: nvidia-smi, btop with NVML, and nvtop";
+      # btop (Apache-2.0), nvtop (GPL-3.0), nvidia-smi wrapper (MIT)
+      license = [ lib.licenses.asl20 lib.licenses.gpl3Only lib.licenses.mit ];
       platforms = lib.platforms.linux;
     };
   };

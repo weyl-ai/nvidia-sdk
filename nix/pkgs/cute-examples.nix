@@ -11,7 +11,7 @@
   versions,
 }:
 
-devStdenv.mkDerivation rec {
+devStdenv.mkDerivation {
   pname = "cute-examples";
   version = versions.cutlass.version;
 

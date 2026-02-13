@@ -19,7 +19,7 @@ let
       def;
 
 in
-rec {
+{
   # Main package builder function
   mkNvidiaPackage = 
     { pname

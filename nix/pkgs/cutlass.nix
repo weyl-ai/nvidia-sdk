@@ -50,7 +50,7 @@ stdenv.mkDerivation {
   meta = {
     description = "NVIDIA CUTLASS ${versions.cutlass.version} - CUDA Templates for Linear Algebra";
     homepage = "https://github.com/NVIDIA/cutlass";
-    license = lib.licenses.asl20;
+    license = lib.licenses.bsd3;
     platforms = [
       "x86_64-linux"
       "aarch64-linux"

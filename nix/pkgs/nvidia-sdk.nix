@@ -224,6 +224,46 @@ stdenv.mkDerivation {
     Libs: -L\''${libdir} -lcudart -lcudnn -lnccl -lnvinfer -lcutensor
     Cflags: -I\''${includedir}
     PC
+
+    # Copy LICENSE files from component packages
+    mkdir -p $out/share/licenses
+
+    copy_license() {
+      local pkg="$1"
+      local name="$2"
+      local found=false
+
+      for license_file in LICENSE LICENSE.txt EULA.txt EULA license.txt License.txt LICENSE.md; do
+        if [ -f "$pkg/$license_file" ]; then
+          cp "$pkg/$license_file" "$out/share/licenses/LICENSE-$name.txt"
+          found=true
+          break
+        fi
+        # Also check in share directory
+        if [ -f "$pkg/share/$license_file" ]; then
+          cp "$pkg/share/$license_file" "$out/share/licenses/LICENSE-$name.txt"
+          found=true
+          break
+        fi
+        # Check in share/doc
+        if [ -f "$pkg/share/doc/$license_file" ]; then
+          cp "$pkg/share/doc/$license_file" "$out/share/licenses/LICENSE-$name.txt"
+          found=true
+          break
+        fi
+      done
+
+      if [ "$found" = false ]; then
+        echo "Warning: No license file found for $name"
+      fi
+    }
+
+    copy_license "${cuda}" "cuda"
+    copy_license "${cudnn}" "cudnn"
+    copy_license "${nccl}" "nccl"
+    copy_license "${tensorrt}" "tensorrt"
+    copy_license "${cutlass}" "cutlass"
+    copy_license "${cutensor}" "cutensor"
   '';
 
   dontStrip = true;

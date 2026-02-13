@@ -13,6 +13,8 @@ let
 
 in
 {
+  _class = "nixos";
+
   options.hardware.nvidia-sdk = {
     enable = lib.mkEnableOption "NVIDIA SDK with driver management";
 

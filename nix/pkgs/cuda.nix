@@ -15,11 +15,12 @@ let
   system = stdenv.hostPlatform.system;
   src-info = versions.cuda.${system} or (throw "cuda: unsupported system ${system}");
 
-  libxml2-legacy = libxml2.overrideAttrs (old: rec {
-    version = "2.9.14";
+  libxml2LegacyVersion = "2.9.14";
+  libxml2-legacy = libxml2.overrideAttrs (_: {
+    version = libxml2LegacyVersion;
 
     src = fetchurl {
-      url = "https://download.gnome.org/sources/libxml2/${lib.versions.majorMinor version}/libxml2-${version}.tar.xz";
+      url = "https://download.gnome.org/sources/libxml2/${lib.versions.majorMinor libxml2LegacyVersion}/libxml2-${libxml2LegacyVersion}.tar.xz";
 
       sha256 = "sha256-YNdKJX0czsBHXnScui8hVZ5IE577pv8oIkNXx8eY3+4=";
     };
@@ -44,10 +45,12 @@ let
     ];
   };
 
-in
-stdenv.mkDerivation rec {
-  pname = "cuda";
   version = versions.cuda.version;
+
+in
+stdenv.mkDerivation {
+  pname = "cuda";
+  inherit version;
 
   src = fetchurl {
     url = src-info.url;

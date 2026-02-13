@@ -455,7 +455,13 @@ This is a production configuration used in production GPU clusters. Changes shou
 
 ## License
 
-Proprietary - NVIDIA components subject to NVIDIA's EULA. Nix expressions are MIT.
+- **Nix expressions**: MIT License (see [LICENSE](LICENSE))
+- **NVIDIA binary components**: Subject to [NVIDIA's proprietary licenses](https://docs.nvidia.com/cuda/eula/)
+- **NCCL, CUTLASS**: BSD-3-Clause
+
+See [THIRD-PARTY-LICENSES.md](THIRD-PARTY-LICENSES.md) for full details.
+
+**Note:** By using this SDK, you agree to comply with the [NVIDIA End User License Agreement](https://www.nvidia.com/en-us/drivers/nvidia-license/).
 
 ## Support
 

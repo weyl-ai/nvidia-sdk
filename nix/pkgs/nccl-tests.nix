@@ -8,9 +8,12 @@
 , cudaArch ? if stdenv.hostPlatform.isAarch64 then "sm_100" else "sm_120"
 }:
 
-stdenv.mkDerivation rec {
-  pname = "nccl-tests";
+let
   version = "2.13.10";
+in
+stdenv.mkDerivation {
+  pname = "nccl-tests";
+  inherit version;
 
   src = fetchFromGitHub {
     owner = "NVIDIA";

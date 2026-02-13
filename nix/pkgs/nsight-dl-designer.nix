@@ -25,7 +25,7 @@ let
     then "linux-desktop-dl-x64"
     else "linux-desktop-dl-sbsa";
 in
-stdenv.mkDerivation rec {
+stdenv.mkDerivation {
   pname = "nsight-dl-designer";
   version = versions.nsight-dl-designer.version;
 

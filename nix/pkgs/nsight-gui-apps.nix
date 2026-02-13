@@ -29,7 +29,7 @@ let
   nsysVersion = versions.nsight.systems.version;
   nsysPath = versions.nsight.systems.${stdenv.hostPlatform.system}.path;
 in
-stdenv.mkDerivation rec {
+stdenv.mkDerivation {
   pname = "nsight-gui-apps";
   version = nvidia-sdk.version;
 
@@ -164,6 +164,8 @@ stdenv.mkDerivation rec {
 
   meta = {
     description = "NVIDIA Nsight GUI profiling tools";
+    homepage = "https://developer.nvidia.com/nsight-systems";
+    license = lib.licenses.unfree;
     platforms = [ "x86_64-linux" "aarch64-linux" ];
   };
 }
