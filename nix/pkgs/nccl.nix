@@ -1,9 +1,13 @@
-{ lib
-, stdenv
-, fetchurl
-, autoPatchelfHook
-, versions
-, cuda
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2025 Weyl AI
+{
+  lib,
+  stdenv,
+  fetchurl,
+  autoPatchelfHook,
+  unzip,
+  versions,
+  cuda,
 }:
 
 stdenv.mkDerivation {
@@ -11,22 +15,42 @@ stdenv.mkDerivation {
   version = versions.nccl.version;
 
   src = fetchurl {
-    url = versions.nccl.${stdenv.hostPlatform.system}.urls.mirror;
+    url = versions.nccl.${stdenv.hostPlatform.system}.url;
     hash = versions.nccl.${stdenv.hostPlatform.system}.hash;
   };
 
-  nativeBuildInputs = [ autoPatchelfHook ];
-  buildInputs = [ stdenv.cc.cc.lib cuda ];
+  nativeBuildInputs = [
+    autoPatchelfHook
+    unzip
+  ];
+  buildInputs = [
+    stdenv.cc.cc.lib
+    cuda
+  ];
 
   sourceRoot = ".";
   dontConfigure = true;
   dontBuild = true;
 
+  # NCCL is distributed as a PyPI wheel (.whl = .zip)
+  # containing nvidia/nccl/lib/ and nvidia/nccl/include/
+  unpackPhase = ''
+    unzip $src
+  '';
+
   installPhase = ''
     runHook preInstall
 
-    mkdir -p $out
-    cp -a lib include $out/
+    mkdir -p $out/{lib,include}
+
+    # PyPI wheel layout: nvidia/nccl/lib/*.so*, nvidia/nccl/include/*.h
+    if [ -d nvidia/nccl/lib ]; then
+      cp -a nvidia/nccl/lib/* $out/lib/
+    fi
+    if [ -d nvidia/nccl/include ]; then
+      cp -a nvidia/nccl/include/* $out/include/
+    fi
+
     ln -sf lib $out/lib64
 
     # Create unversioned symlink for linker
@@ -54,6 +78,9 @@ stdenv.mkDerivation {
     description = "NVIDIA NCCL ${versions.nccl.version}";
     homepage = "https://developer.nvidia.com/nccl";
     license = lib.licenses.bsd3;
-    platforms = [ "x86_64-linux" "aarch64-linux" ];
+    platforms = [
+      "x86_64-linux"
+      "aarch64-linux"
+    ];
   };
 }

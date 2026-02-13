@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2025 Weyl AI
 {
   lib,
   stdenv,
@@ -32,37 +34,37 @@ stdenv.mkDerivation {
   ];
 
   postPatch = ''
-    # Build core samples confirmed to exist in v13.0
-    cat > CMakeLists.txt << 'EOF'
-cmake_minimum_required(VERSION 3.20)
-project(cuda_samples CUDA CXX)
+        # Build core samples confirmed to exist in v13.0
+        cat > CMakeLists.txt << 'EOF'
+    cmake_minimum_required(VERSION 3.20)
+    project(cuda_samples CUDA CXX)
 
-find_package(CUDAToolkit REQUIRED)
+    find_package(CUDAToolkit REQUIRED)
 
-# 0_Introduction - Basic CUDA concepts
-add_subdirectory(Samples/0_Introduction/vectorAdd)
-add_subdirectory(Samples/0_Introduction/vectorAddDrv)
-add_subdirectory(Samples/0_Introduction/matrixMul)
-add_subdirectory(Samples/0_Introduction/matrixMulDrv)
-add_subdirectory(Samples/0_Introduction/clock)
-add_subdirectory(Samples/0_Introduction/simpleStreams)
-add_subdirectory(Samples/0_Introduction/simpleMultiGPU)
+    # 0_Introduction - Basic CUDA concepts
+    add_subdirectory(Samples/0_Introduction/vectorAdd)
+    add_subdirectory(Samples/0_Introduction/vectorAddDrv)
+    add_subdirectory(Samples/0_Introduction/matrixMul)
+    add_subdirectory(Samples/0_Introduction/matrixMulDrv)
+    add_subdirectory(Samples/0_Introduction/clock)
+    add_subdirectory(Samples/0_Introduction/simpleStreams)
+    add_subdirectory(Samples/0_Introduction/simpleMultiGPU)
 
-# 1_Utilities - Essential diagnostic tools
-add_subdirectory(Samples/1_Utilities/deviceQuery)
-add_subdirectory(Samples/1_Utilities/deviceQueryDrv)
+    # 1_Utilities - Essential diagnostic tools
+    add_subdirectory(Samples/1_Utilities/deviceQuery)
+    add_subdirectory(Samples/1_Utilities/deviceQueryDrv)
 
-# 3_CUDA_Features - Tensor Cores
-add_subdirectory(Samples/3_CUDA_Features/cudaTensorCoreGemm)
-add_subdirectory(Samples/3_CUDA_Features/bf16TensorCoreGemm)
-add_subdirectory(Samples/3_CUDA_Features/tf32TensorCoreGemm)
+    # 3_CUDA_Features - Tensor Cores
+    add_subdirectory(Samples/3_CUDA_Features/cudaTensorCoreGemm)
+    add_subdirectory(Samples/3_CUDA_Features/bf16TensorCoreGemm)
+    add_subdirectory(Samples/3_CUDA_Features/tf32TensorCoreGemm)
 
-# 4_CUDA_Libraries - cuBLAS, cuFFT examples
-add_subdirectory(Samples/4_CUDA_Libraries/simpleCUBLAS)
-add_subdirectory(Samples/4_CUDA_Libraries/simpleCUFFT)
-add_subdirectory(Samples/4_CUDA_Libraries/conjugateGradient)
+    # 4_CUDA_Libraries - cuBLAS, cuFFT examples
+    add_subdirectory(Samples/4_CUDA_Libraries/simpleCUBLAS)
+    add_subdirectory(Samples/4_CUDA_Libraries/simpleCUFFT)
+    add_subdirectory(Samples/4_CUDA_Libraries/conjugateGradient)
 
-EOF
+    EOF
   '';
 
   installPhase = ''
@@ -74,6 +76,9 @@ EOF
     description = "NVIDIA CUDA Samples ${version}";
     homepage = "https://github.com/NVIDIA/cuda-samples";
     license = lib.licenses.bsd3;
-    platforms = [ "x86_64-linux" "aarch64-linux" ];
+    platforms = [
+      "x86_64-linux"
+      "aarch64-linux"
+    ];
   };
 }

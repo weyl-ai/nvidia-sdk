@@ -2,154 +2,128 @@
 
 This document contains license information for all NVIDIA SDK components included in this project.
 
-## Table of Contents
+## Summary
 
-1. [CUDA Toolkit](#cuda-toolkit)
-2. [cuDNN](#cudnn)
-3. [TensorRT](#tensorrt)
-4. [NCCL](#nccl)
-5. [CUTLASS](#cutlass)
-6. [cuTensor](#cutensor)
-7. [Nsight Tools](#nsight-tools)
+| Component | License | Source | Redistributable |
+|-----------|---------|--------|-----------------|
+| CUDA Toolkit | NVIDIA EULA | developer.download.nvidia.com | Runtime libs only |
+| cuDNN | NVIDIA SLA | developer.download.nvidia.com | As part of apps |
+| TensorRT | NVIDIA SLA | developer.download.nvidia.com | Runtime only |
+| NCCL | BSD-3-Clause | PyPI | Yes |
+| CUTLASS | BSD-3-Clause | GitHub | Yes |
+| cuTensor | NVIDIA SLA | developer.download.nvidia.com | As part of apps |
 
 ---
 
 ## CUDA Toolkit
 
 **Component:** NVIDIA CUDA Toolkit  
-**Version:** See `nix/versions/cuda/default.nix` for current version  
+**Version:** 13.1  
 **License Type:** NVIDIA CUDA Toolkit End User License Agreement (EULA)  
-**Official License:** https://docs.nvidia.com/cuda/eula/
+**Official License:** https://docs.nvidia.com/cuda/eula/  
+**Source:** https://developer.download.nvidia.com/compute/cuda/
 
-### Key Redistribution Terms
+### Key Terms
 
 - CUDA runtime libraries may be redistributed with applications that use them
-- Redistribution requires including the NVIDIA copyright notice and license
-- The CUDA compiler (nvcc) and development tools are not redistributable
-- Sample code may be modified and redistributed
-- No reverse engineering, decompilation, or disassembly permitted
+- The CUDA compiler (nvcc) and development tools are NOT redistributable
 - Use is limited to systems with NVIDIA GPUs
+- No reverse engineering permitted
 
 ---
 
 ## cuDNN
 
 **Component:** NVIDIA CUDA Deep Neural Network library (cuDNN)  
-**Version:** See `nix/versions/cudnn/default.nix` for current version  
+**Version:** 9.17.0.29  
 **License Type:** NVIDIA cuDNN Software License Agreement (SLA)  
-**Official License:** https://docs.nvidia.com/deeplearning/cudnn/sla/index.html
+**Official License:** https://docs.nvidia.com/deeplearning/cudnn/latest/reference/eula.html  
+**Source:** https://developer.download.nvidia.com/compute/cudnn/redist/
 
-### Key Redistribution Terms
+### Key Terms
 
 - cuDNN libraries may be redistributed as part of applications
-- Must include NVIDIA attribution and license notice
 - Cannot be redistributed standalone or as a development kit
 - Use restricted to NVIDIA GPU-based systems
-- No benchmarking results may be published without NVIDIA approval
-- Redistribution of documentation is not permitted
 
 ---
 
 ## TensorRT
 
 **Component:** NVIDIA TensorRT  
-**Version:** See `nix/versions/tensorrt/default.nix` for current version  
-**License Type:** NVIDIA TensorRT Software License Agreement (SLA) + Apache 2.0 (OSS components)  
-**Official License:** https://docs.nvidia.com/deeplearning/tensorrt/sla/index.html
+**Version:** 10.15.1.29  
+**License Type:** NVIDIA TensorRT Software License Agreement (SLA)  
+**Official License:** https://docs.nvidia.com/deeplearning/tensorrt/sla/index.html  
+**Source:** https://developer.download.nvidia.com/compute/machine-learning/tensorrt/
 
-### Key Redistribution Terms
+### Key Terms
 
 - TensorRT runtime libraries may be redistributed with applications
-- Must include NVIDIA copyright notice and license
-- Development headers and tools are not redistributable
+- Development headers and tools are NOT redistributable
+- Must include NVIDIA attribution notice
 - Use restricted to NVIDIA GPU-based systems
-
-### Open Source Components
-
-The TensorRT Open Source Software (OSS) repository, including parsers and plugins, is licensed under Apache License 2.0:
-
-- Repository: https://github.com/NVIDIA/TensorRT
-- License: Apache License 2.0
-- These components may be freely modified and redistributed under Apache 2.0 terms
 
 ---
 
 ## NCCL
 
-**Component:** NVIDIA Collective Communications Library (NCCL)  
-**Version:** See `nix/versions/nccl/default.nix` for current version  
-**License Type:** BSD 3-Clause License  
-**Source:** https://github.com/NVIDIA/nccl
+**Component:** NVIDIA Collective Communication Library (NCCL)  
+**Version:** 2.28.9  
+**License Type:** BSD-3-Clause  
+**Source:** https://files.pythonhosted.org/packages/ (PyPI wheel)  
+**GitHub:** https://github.com/NVIDIA/nccl
 
-### Full License Text
+### License Text
 
 ```
-Copyright (c) 2015-2024, NVIDIA CORPORATION. All rights reserved.
+Copyright (c) 2015-2025, NVIDIA CORPORATION. All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions are met:
+modification, are permitted provided that the following conditions
+are met:
+ * Redistributions of source code must retain the above copyright
+   notice, this list of conditions and the following disclaimer.
+ * Redistributions in binary form must reproduce the above copyright
+   notice, this list of conditions and the following disclaimer in the
+   documentation and/or other materials provided with the distribution.
+ * Neither the name of NVIDIA CORPORATION, LAWRENCE BERKELEY NATIONAL
+   LABORATORY, nor the names of their contributors may be used to endorse
+   or promote products derived from this software without specific prior
+   written permission.
 
-1. Redistributions of source code must retain the above copyright notice, this
-   list of conditions and the following disclaimer.
-
-2. Redistributions in binary form must reproduce the above copyright notice,
-   this list of conditions and the following disclaimer in the documentation
-   and/or other materials provided with the distribution.
-
-3. Neither the name of the copyright holder nor the names of its
-   contributors may be used to endorse or promote products derived from
-   this software without specific prior written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
-DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
-FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
-DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
-SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
-CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
-OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
-OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS ``AS IS'' AND ANY
+EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
+PURPOSE ARE DISCLAIMED.
 ```
 
 ---
 
 ## CUTLASS
 
-**Component:** CUDA Templates for Linear Algebra Subroutines (CUTLASS)  
-**Version:** See `nix/versions/cutlass/default.nix` for current version  
-**License Type:** BSD 3-Clause License  
+**Component:** CUDA Templates for Linear Algebra Subroutines  
+**Version:** 4.3.3  
+**License Type:** BSD-3-Clause  
 **Source:** https://github.com/NVIDIA/cutlass
 
-### Full License Text
+### License Text
 
 ```
-Copyright (c) 2017-2024, NVIDIA CORPORATION. All rights reserved.
+Copyright (c) 2017-2025, NVIDIA CORPORATION. All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
 modification, are permitted provided that the following conditions are met:
-
-1. Redistributions of source code must retain the above copyright notice, this
-   list of conditions and the following disclaimer.
-
-2. Redistributions in binary form must reproduce the above copyright notice,
-   this list of conditions and the following disclaimer in the documentation
-   and/or other materials provided with the distribution.
-
-3. Neither the name of the copyright holder nor the names of its
-   contributors may be used to endorse or promote products derived from
-   this software without specific prior written permission.
+    * Redistributions of source code must retain the above copyright
+      notice, this list of conditions and the following disclaimer.
+    * Redistributions in binary form must reproduce the above copyright
+      notice, this list of conditions and the following disclaimer in the
+      documentation and/or other materials provided with the distribution.
+    * Neither the name of the NVIDIA CORPORATION nor the names of its
+      contributors may be used to endorse or promote products derived from
+      this software without specific prior written permission.
 
 THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
-DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
-FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
-DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
-SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
-CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
-OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
-OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+AND ANY EXPRESS OR IMPLIED WARRANTIES ARE DISCLAIMED.
 ```
 
 ---
@@ -157,57 +131,46 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ## cuTensor
 
 **Component:** NVIDIA cuTENSOR  
-**Version:** See `nix/versions/cutensor/default.nix` for current version  
-**License Type:** NVIDIA cuTENSOR End User License Agreement (EULA)  
-**Official License:** https://docs.nvidia.com/cuda/cutensor/latest/license.html
+**Version:** 2.4.1.4  
+**License Type:** NVIDIA cuTENSOR Software License Agreement  
+**Official License:** https://docs.nvidia.com/cuda/cutensor/latest/license.html  
+**Source:** https://developer.download.nvidia.com/compute/cutensor/redist/
 
-### Key Redistribution Terms
+### Key Terms
 
-- cuTENSOR libraries may be redistributed with applications
-- Must include NVIDIA copyright notice and license
-- Use restricted to NVIDIA GPU-based systems
+- cuTensor may be redistributed as part of applications
 - No standalone redistribution permitted
-- Development headers are not redistributable
-- No benchmarking results may be published without NVIDIA approval
+- Use restricted to NVIDIA GPU-based systems
 
 ---
 
-## Nsight Tools
+## Nix Expressions
 
-**Component:** NVIDIA Nsight Systems, Nsight Compute, Nsight Graphics  
-**Version:** See `nix/versions/nsight/default.nix` for current version  
-**License Type:** NVIDIA Software License Agreement  
-**Official License:** https://developer.nvidia.com/nvidia-development-tools-solutions-eula
+The Nix expressions in this repository are licensed under the MIT License:
 
-### Key Redistribution Terms
+```
+MIT License
 
-- Nsight tools are NOT redistributable
-- Licensed for development and debugging purposes only
-- Cannot be included in distributed applications
-- Each developer must obtain their own license
-- Use requires acceptance of NVIDIA Developer Program terms
+Copyright (c) 2025 Weyl AI
 
----
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
 
-## General Notes
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
 
-### NVIDIA Software License Compliance
-
-When using NVIDIA SDK components, you must:
-
-1. **Accept License Terms:** All NVIDIA software requires acceptance of applicable license agreements
-2. **Include Attribution:** Distributed applications must include appropriate copyright notices
-3. **GPU Requirement:** Most NVIDIA libraries require NVIDIA GPU hardware for execution
-4. **Export Compliance:** NVIDIA software may be subject to U.S. export control laws
-
-### Version Information
-
-All component versions used in this project are defined in the `nix/versions/` directory. Refer to the specific version files for exact version numbers and SHA256 hashes of distributed binaries.
-
-### Updates
-
-License terms may change between versions. Always refer to the official NVIDIA documentation links provided above for the most current license terms applicable to the specific version you are using.
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+```
 
 ---
 
-*Last updated: 2024*
+## Acceptance
+
+By using this SDK, you agree to comply with all applicable license terms.
+For NVIDIA proprietary components, see the [NVIDIA End User License Agreement](https://www.nvidia.com/en-us/drivers/nvidia-license/).

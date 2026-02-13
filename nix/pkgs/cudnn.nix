@@ -1,19 +1,34 @@
-{ lib, stdenv, fetchurl, zlib, extract, versions, cuda }:
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2025 Weyl AI
+{
+  lib,
+  stdenv,
+  fetchurl,
+  zlib,
+  extract,
+  versions,
+  cuda,
+}:
 
 let
   system = stdenv.hostPlatform.system;
   src-info = versions.cudnn.${system} or (throw "cudnn: unsupported system ${system}");
 
-in extract.extract {
+in
+extract.extract {
   pname = "cudnn";
   version = versions.cudnn.version;
 
   src = fetchurl {
-    url = src-info.urls.mirror;
+    url = src-info.url;
     hash = src-info.hash;
   };
 
-  runtime-inputs = [ stdenv.cc.cc.lib cuda zlib ];
+  runtime-inputs = [
+    stdenv.cc.cc.lib
+    cuda
+    zlib
+  ];
 
   install = ''
     tar xf $src
@@ -26,6 +41,9 @@ in extract.extract {
     description = "NVIDIA cuDNN ${versions.cudnn.version}";
     homepage = "https://developer.nvidia.com/cudnn";
     license = lib.licenses.unfree;
-    platforms = [ "x86_64-linux" "aarch64-linux" ];
+    platforms = [
+      "x86_64-linux"
+      "aarch64-linux"
+    ];
   };
 }

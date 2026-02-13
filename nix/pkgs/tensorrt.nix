@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2025 Weyl AI
 {
   lib,
   stdenv,
@@ -19,7 +21,7 @@ extract.extract {
   version = versions.tensorrt.version;
 
   src = fetchurl {
-    url = src-info.urls.mirror;
+    url = src-info.url;
     hash = src-info.hash;
   };
 

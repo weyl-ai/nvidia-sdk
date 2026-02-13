@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2025 Weyl AI
+#
 # Build LLVM/Clang from git HEAD with CUDA 13.0 and SM120 support
 {
   lib,

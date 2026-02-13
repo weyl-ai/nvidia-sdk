@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2025 Weyl AI
 {
   lib,
   stdenv,
@@ -19,7 +21,10 @@ stdenv.mkDerivation {
     hash = versions.cutlass.hash;
   };
 
-  nativeBuildInputs = [ cmake pkgs.python3 ];
+  nativeBuildInputs = [
+    cmake
+    pkgs.python3
+  ];
   buildInputs = [ cuda ];
 
   cmakeFlags = [

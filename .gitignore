@@ -3,11 +3,13 @@
 
 # Test files and experiments
 test-*
-!tests/
 
 # Build outputs
 result
 result-*
+
+# Generated archives
+bundle.tar.gz
 
 # Symlinks to nix store
 cutlass-src

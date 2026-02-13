@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2025 Weyl AI
 {
   lib,
   stdenv,
@@ -10,30 +12,16 @@
   cudnn,
   cutensor,
   cutlass,
-  dbus,
   file,
   findutils,
   gnugrep,
-  libglvnd,
-  mesa,
   nccl,
-  qt6,
   resholve,
   tensorrt,
   versions,
-  xorg,
 }:
 
 let
-  # Nsight version and path data from versions.nix
-  ncuVersion = versions.nsight.compute.version;
-  ncuDir = "nsight-compute-${ncuVersion}";
-  ncuHostPath = versions.nsight.compute.${stdenv.hostPlatform.system}.path;
-
-  nsysVersion = versions.nsight.systems.version;
-  nsysDir = "nsight-systems-${nsysVersion}";
-  nsysHostPath = versions.nsight.systems.${stdenv.hostPlatform.system}.path;
-
   patchElfScript = resholve.mkDerivation {
     pname = "patch-nvidia-elfs";
     version = "1.0.0";
@@ -50,7 +38,13 @@ let
       scripts = [ "bin/patch-nvidia-elfs" ];
       interpreter = "${bash}/bin/bash";
 
-      inputs = [ coreutils patchelf file findutils gnugrep ];
+      inputs = [
+        coreutils
+        patchelf
+        file
+        findutils
+        gnugrep
+      ];
 
       execer = [
         "cannot:${patchelf}/bin/patchelf"
@@ -89,17 +83,13 @@ stdenv.mkDerivation {
   version = versions.cuda.version;
 
   dontUnpack = true;
-  nativeBuildInputs = [ makeWrapper patchelf file ];
+  nativeBuildInputs = [
+    makeWrapper
+    patchelf
+    file
+  ];
   buildInputs = [
     merged
-    qt6.qtbase
-    qt6.qtwayland
-    mesa
-    libglvnd
-    xorg.libX11
-    xorg.libXext
-    xorg.libXrender
-    xorg.libxcb
     stdenv.cc.cc.lib
   ];
 
@@ -113,22 +103,13 @@ stdenv.mkDerivation {
       fi
     done
 
-    # Copy Nsight and profiling tools from CUDA
-    if [ -d "${cuda}/${ncuDir}" ]; then
-      cp -rL "${cuda}/${ncuDir}" "$out/" 2>/dev/null || true
-    fi
-    if [ -d "${cuda}/${nsysDir}" ]; then
-      cp -rL "${cuda}/${nsysDir}" "$out/" 2>/dev/null || true
-    fi
+    # Copy CUPTI libraries
     if [ -d "${cuda}/extras/CUPTI/lib64" ]; then
       echo "Copying CUPTI libraries..."
       cp -rL "${cuda}/extras/CUPTI/lib64"/* "$out/lib64/" 2>/dev/null || true
     fi
     if [ -d "${cuda}/compute-sanitizer" ]; then
       cp -rL "${cuda}/compute-sanitizer" "$out/" 2>/dev/null || true
-    fi
-    if [ -d "${cuda}/nsightee_plugins" ]; then
-      cp -rL "${cuda}/nsightee_plugins" "$out/" 2>/dev/null || true
     fi
 
     # Copy headers from all packages
@@ -150,7 +131,6 @@ stdenv.mkDerivation {
     done
 
     # Merge all libraries from both lib and lib64 into $out/lib64
-    # This handles the different directory structures across packages
     for pkg in ${cuda} ${cudnn} ${nccl} ${tensorrt} ${cutlass} ${cutensor}; do
       for libdir in lib lib64; do
         if [ -d "$pkg/$libdir" ] && [ ! -L "$pkg/$libdir" ]; then
@@ -201,9 +181,9 @@ stdenv.mkDerivation {
     echo "NVIDIA SDK Components:"
     for lib in cudart cublas cufft curand cusolver cusparse nvrtc cudnn nccl nvinfer cutensor cupti; do
       if ls @out@/lib64/lib$lib*.so* >/dev/null 2>&1; then
-        echo "  ✓ $lib"
+        echo "  + $lib"
       else
-        echo "  ✗ $lib"
+        echo "  - $lib"
       fi
     done
     echo ""
@@ -239,13 +219,11 @@ stdenv.mkDerivation {
           found=true
           break
         fi
-        # Also check in share directory
         if [ -f "$pkg/share/$license_file" ]; then
           cp "$pkg/share/$license_file" "$out/share/licenses/LICENSE-$name.txt"
           found=true
           break
         fi
-        # Check in share/doc
         if [ -f "$pkg/share/doc/$license_file" ]; then
           cp "$pkg/share/doc/$license_file" "$out/share/licenses/LICENSE-$name.txt"
           found=true
@@ -268,25 +246,20 @@ stdenv.mkDerivation {
 
   dontStrip = true;
   dontMoveLib64 = true;
-  dontWrapQtApps = true;
 
   postFixup =
     let
-      qtLibs = "${qt6.qtbase}/lib";
-      mesaLibs = "${mesa}/lib:${libglvnd}/lib";
-      x11Libs = "${xorg.libX11}/lib:${xorg.libXext}/lib:${xorg.libXrender}/lib:${xorg.libxcb}/lib";
-      sysLibs = "${stdenv.cc.cc.lib}/lib:${dbus}/lib";
-      nsightLibs = "$out/${ncuDir}/${ncuHostPath}:$out/${nsysDir}/${nsysHostPath}:$out/${nsysDir}/target-linux-${if stdenv.hostPlatform.isAarch64 then "sbsa" else "x64"}";
+      sysLibs = "${stdenv.cc.cc.lib}/lib";
       dynamicLinker = "$(cat ${stdenv.cc}/nix-support/dynamic-linker)";
     in
     ''
       ${patchElfScript}/bin/patch-nvidia-elfs \
         "$out" \
-        "${qtLibs}" \
-        "${mesaLibs}" \
-        "${x11Libs}" \
+        "" \
+        "" \
+        "" \
         "${sysLibs}" \
-        "${nsightLibs}" \
+        "" \
         "${dynamicLinker}"
     '';
 

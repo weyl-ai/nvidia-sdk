@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2025 Weyl AI
+#
 # nvidia-sdk.nix — NixOS Module
 #
 # Provides declarative NVIDIA driver + CUDA SDK configuration.
@@ -5,7 +8,12 @@
 # Usage:
 #   hardware.nvidia-sdk.enable = true;
 
-{ config, lib, pkgs, ... }:
+{
+  config,
+  lib,
+  pkgs,
+  ...
+}:
 
 let
   cfg = config.hardware.nvidia-sdk;
@@ -109,7 +117,10 @@ in
 
     environment.systemPackages = lib.mkMerge [
       (lib.mkIf cfg.systemPackages [ pkgs.nvidia-sdk ])
-      (lib.mkIf cfg.monitoring [ pkgs.nvtop pkgs.btop-nvml ])
+      (lib.mkIf cfg.monitoring [
+        pkgs.nvtop
+        pkgs.btop-nvml
+      ])
     ];
 
     # ──────────────────────────────────────────────────────────────────────────

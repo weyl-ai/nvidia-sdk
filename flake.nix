@@ -1,16 +1,11 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2025 Weyl AI
 {
-  description = "NVIDIA SDK — CUDA 13.1 + Blackwell SM120 + NGC 25.12";
-
-  nixConfig = {
-    extra-substituters = [ "https://weyl-ai.cachix.org" ];
-    extra-trusted-public-keys = [ "weyl-ai.cachix.org-1:cR0SpSAPw7wejZ21ep4SLojE77gp5F2os260eEWqTTw=" ];
-  };
+  description = "NVIDIA CUDA SDK for NixOS — CUDA 13.1 + Blackwell SM120";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     flake-parts.url = "github:hercules-ci/flake-parts";
-    agenix.url = "github:ryantm/agenix";
-    agenix.inputs.nixpkgs.follows = "nixpkgs";
 
     # LLVM pinned to known-good SM120 support
     llvm-project = {
@@ -19,11 +14,16 @@
     };
   };
 
-  outputs = inputs@{ flake-parts, ... }:
+  outputs =
+    inputs@{ flake-parts, ... }:
     flake-parts.lib.mkFlake { inherit inputs; } {
-      systems = [ "x86_64-linux" "aarch64-linux" ];
+      systems = [
+        "x86_64-linux"
+        "aarch64-linux"
+      ];
 
-      perSystem = { config, system, ... }:
+      perSystem =
+        { config, system, ... }:
         let
           versions = import ./nix/versions.nix;
 
@@ -113,39 +113,21 @@
             cuda = cuda;
           };
 
-          cutlass = pkgs.callPackage ./nix/pkgs/cutlass.nix { inherit versions; cuda = cuda; };
+          cutlass = pkgs.callPackage ./nix/pkgs/cutlass.nix {
+            inherit versions;
+            cuda = cuda;
+          };
 
           nvidia-sdk = pkgs.callPackage ./nix/pkgs/nvidia-sdk.nix {
-            inherit versions cuda cudnn nccl tensorrt cutlass cutensor;
-          };
-
-          # ════════════════════════════════════════════════════════════════════
-          # NGC CONTAINER — Single Source of Truth
-          # ════════════════════════════════════════════════════════════════════
-
-          ngcContainer = modern.container-to-nix {
-            name = "ngc-${versions.ngc.version}-rootfs";
-            imageRef = versions.triton-trtllm-container.${system}.ref;
-            hash = versions.triton-trtllm-container.${system}.hash;
-          };
-
-          tritonserver = pkgs.callPackage ./nix/pkgs/tritonserver.nix {
-            inherit versions modern nvidia-sdk;
-            containerSrc = ngcContainer;
-            backend = "trtllm";
-          };
-
-          # ════════════════════════════════════════════════════════════════════
-          # PYTHON 3.12 — Complete NGC environment
-          # ════════════════════════════════════════════════════════════════════
-          #
-          # All Python packages (torch, triton, tensorrt_llm, numpy, etc.)
-          # extracted from NGC container. This is the complete, self-consistent
-          # set - no nixpkgs CUDA/torch deps.
-
-          python = pkgs.callPackage ./nix/pkgs/ngc-python.nix {
-            containerSrc = ngcContainer;
-            nvidia-sdk = nvidia-sdk;
+            inherit
+              versions
+              cuda
+              cudnn
+              nccl
+              tensorrt
+              cutlass
+              cutensor
+              ;
           };
 
           # ════════════════════════════════════════════════════════════════════
@@ -167,19 +149,12 @@
           };
 
           # ════════════════════════════════════════════════════════════════════
-          # MONITORING & PROFILING
+          # MONITORING
           # ════════════════════════════════════════════════════════════════════
 
           monitoring = pkgs.callPackage ./nix/pkgs/monitoring-tools.nix {
             cuda = cuda;
           };
-
-          # Nsight GUI apps (profilers)
-          nsight-gui-apps = pkgs.callPackage ./nix/pkgs/nsight-gui-apps.nix {
-            inherit versions nvidia-sdk;
-          };
-
-          agenix = inputs.agenix.packages.${system}.default;
 
         in
         {
@@ -194,8 +169,6 @@
               cutensor
               cutlass
               cuda-merged
-              tritonserver
-              python
               cuda-samples
               nccl-tests
               validate-sdk
@@ -205,17 +178,13 @@
 
             nvtop = monitoring.nvtop;
             btop = monitoring.btop;
-
-            # Nsight profiling tools
-            inherit nsight-gui-apps;
           };
 
           devShells.default = pkgs.mkShell {
-            packages = [ nvidia-sdk python agenix ];
+            packages = [ nvidia-sdk ];
 
             shellHook = ''
               echo "nvidia-sdk — CUDA ${versions.cuda.version} — NGC ${versions.ngc.version}"
-              echo "Complete Python environment from NGC container"
               echo ""
               export LD_LIBRARY_PATH="${nvidia-sdk}/lib64:/run/opengl-driver/lib''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
               export CUDA_PATH="${nvidia-sdk}"
@@ -225,85 +194,91 @@
 
           checks = {
             # ── SDK structure ──────────────────────────────────────────────
-            # Verifies the merged nvidia-sdk has headers, libraries,
-            # setup-hook env vars, pkg-config, and version metadata.
-            sdk-structure = pkgs.runCommand "check-sdk-structure"
-              { nativeBuildInputs = [ nvidia-sdk pkgs.pkg-config ]; }
-              ''
-                echo "=== SDK structure check ==="
+            sdk-structure =
+              pkgs.runCommand "check-sdk-structure"
+                {
+                  nativeBuildInputs = [
+                    nvidia-sdk
+                    pkgs.pkg-config
+                  ];
+                }
+                ''
+                  echo "=== SDK structure check ==="
 
-                # setup-hook must set CUDA_PATH
-                test -n "$CUDA_PATH" || (echo "FAIL: CUDA_PATH not set by setup-hook" && exit 1)
-                echo "ok: CUDA_PATH=$CUDA_PATH"
+                  # setup-hook must set CUDA_PATH
+                  test -n "$CUDA_PATH" || (echo "FAIL: CUDA_PATH not set by setup-hook" && exit 1)
+                  echo "ok: CUDA_PATH=$CUDA_PATH"
 
-                # Headers
-                test -d "$CUDA_PATH/include" || (echo "FAIL: include/ missing" && exit 1)
-                for hdr in cuda.h cudnn.h nccl.h NvInfer.h cutensor.h; do
-                  test -f "$CUDA_PATH/include/$hdr" || (echo "FAIL: $hdr missing" && exit 1)
-                done
-                echo "ok: headers present"
+                  # Headers
+                  test -d "$CUDA_PATH/include" || (echo "FAIL: include/ missing" && exit 1)
+                  for hdr in cuda.h cudnn.h nccl.h NvInfer.h cutensor.h; do
+                    test -f "$CUDA_PATH/include/$hdr" || (echo "FAIL: $hdr missing" && exit 1)
+                  done
+                  echo "ok: headers present"
 
-                # Core libraries
-                for lib in cudart cublas cufft curand cusolver cusparse nvrtc cudnn nccl nvinfer cutensor; do
-                  ls "$CUDA_PATH/lib64/lib$lib"*.so* >/dev/null 2>&1 || (echo "FAIL: lib$lib.so missing" && exit 1)
-                done
-                echo "ok: core libraries present"
+                  # Core libraries
+                  for lib in cudart cublas cufft curand cusolver cusparse nvrtc cudnn nccl nvinfer cutensor; do
+                    ls "$CUDA_PATH/lib64/lib$lib"*.so* >/dev/null 2>&1 || (echo "FAIL: lib$lib.so missing" && exit 1)
+                  done
+                  echo "ok: core libraries present"
 
-                # Key binaries
-                for bin in nvcc ptxas fatbinary nvlink; do
-                  test -x "$CUDA_PATH/bin/$bin" || (echo "FAIL: $bin missing" && exit 1)
-                done
-                echo "ok: core binaries present"
+                  # Key binaries
+                  for bin in nvcc ptxas fatbinary nvlink; do
+                    test -x "$CUDA_PATH/bin/$bin" || (echo "FAIL: $bin missing" && exit 1)
+                  done
+                  echo "ok: core binaries present"
 
-                # pkg-config
-                pkg-config --validate nvidia-sdk || (echo "FAIL: nvidia-sdk.pc invalid" && exit 1)
-                echo "ok: pkg-config valid"
+                  # pkg-config
+                  pkg-config --validate nvidia-sdk || (echo "FAIL: nvidia-sdk.pc invalid" && exit 1)
+                  echo "ok: pkg-config valid"
 
-                # version.json
-                test -f "$CUDA_PATH/version.json" || (echo "FAIL: version.json missing" && exit 1)
-                echo "ok: version.json present"
+                  # version.json
+                  test -f "$CUDA_PATH/version.json" || (echo "FAIL: version.json missing" && exit 1)
+                  echo "ok: version.json present"
 
-                # validate script
-                test -x "$CUDA_PATH/bin/nvidia-sdk-validate" || (echo "FAIL: nvidia-sdk-validate missing" && exit 1)
-                echo "ok: nvidia-sdk-validate present"
+                  # validate script
+                  test -x "$CUDA_PATH/bin/nvidia-sdk-validate" || (echo "FAIL: nvidia-sdk-validate missing" && exit 1)
+                  echo "ok: nvidia-sdk-validate present"
 
-                echo "=== SDK structure: PASS ===" > $out
-              '';
+                  echo "=== SDK structure: PASS ===" > $out
+                '';
 
             # ── Version consistency ────────────────────────────────────────
-            # Verifies that version.json inside the built SDK matches
-            # the versions declared in nix/versions.nix.
-            version-consistency = pkgs.runCommand "check-version-consistency"
-              { nativeBuildInputs = [ nvidia-sdk pkgs.jq ]; }
-              ''
-                echo "=== Version consistency check ==="
-
-                json="$CUDA_PATH/version.json"
-                test -f "$json" || (echo "FAIL: version.json missing" && exit 1)
-
-                check() {
-                  local key="$1" expected="$2"
-                  actual=$(${pkgs.jq}/bin/jq -r ".$key" "$json")
-                  if [ "$actual" != "$expected" ]; then
-                    echo "FAIL: $key: expected '$expected', got '$actual'"
-                    exit 1
-                  fi
-                  echo "ok: $key=$actual"
+            version-consistency =
+              pkgs.runCommand "check-version-consistency"
+                {
+                  nativeBuildInputs = [
+                    nvidia-sdk
+                    pkgs.jq
+                  ];
                 }
+                ''
+                  echo "=== Version consistency check ==="
 
-                check cuda     "${versions.cuda.version}"
-                check cudnn    "${versions.cudnn.version}"
-                check nccl     "${versions.nccl.version}"
-                check tensorrt "${versions.tensorrt.version}"
-                check cutlass  "${versions.cutlass.version}"
-                check cutensor "${versions.cutensor.version}"
+                  json="$CUDA_PATH/version.json"
+                  test -f "$json" || (echo "FAIL: version.json missing" && exit 1)
 
-                echo "=== Version consistency: PASS ===" > $out
-              '';
+                  check() {
+                    local key="$1" expected="$2"
+                    actual=$(${pkgs.jq}/bin/jq -r ".$key" "$json")
+                    if [ "$actual" != "$expected" ]; then
+                      echo "FAIL: $key: expected '$expected', got '$actual'"
+                      exit 1
+                    fi
+                    echo "ok: $key=$actual"
+                  }
+
+                  check cuda     "${versions.cuda.version}"
+                  check cudnn    "${versions.cudnn.version}"
+                  check nccl     "${versions.nccl.version}"
+                  check tensorrt "${versions.tensorrt.version}"
+                  check cutlass  "${versions.cutlass.version}"
+                  check cutensor "${versions.cutensor.version}"
+
+                  echo "=== Version consistency: PASS ===" > $out
+                '';
 
             # ── LLVM NVPTX target ─────────────────────────────────────────
-            # Verifies the custom LLVM build supports the NVPTX backend
-            # (required for CUDA compilation via clang).
             llvm-nvptx = pkgs.runCommand "check-llvm-nvptx" { } ''
               ${llvm-git}/bin/clang --print-targets | ${pkgs.gnugrep}/bin/grep -iq nvptx \
                 || (echo "FAIL: NVPTX target missing from LLVM" && exit 1)
@@ -311,8 +286,6 @@
             '';
 
             # ── Individual package structure ──────────────────────────────
-            # Spot-checks that individual component packages have the
-            # expected directories/files (catches broken extractions).
             component-structure = pkgs.runCommand "check-component-structure" { } ''
               echo "=== Component structure check ==="
 
@@ -351,60 +324,17 @@
             '';
 
             # ── Setup-hook env vars ───────────────────────────────────────
-            # Verifies the setup-hook correctly exports all expected vars.
-            setup-hook = pkgs.runCommand "check-setup-hook"
-              { nativeBuildInputs = [ nvidia-sdk ]; }
-              ''
-                echo "=== Setup-hook check ==="
-                for var in CUDA_PATH CUDA_HOME CUDNN_HOME TENSORRT_HOME; do
-                  eval "val=\$$var"
-                  test -n "$val" || (echo "FAIL: $var not set" && exit 1)
-                  echo "ok: $var=$val"
-                done
-                echo "=== Setup-hook: PASS ===" > $out
-              '';
-
-            # ── Nsight tools ──────────────────────────────────────────────
-            # Verifies Nsight Compute and Systems directories exist in
-            # the SDK, and that the CLI wrappers (ncu, nsys) are present.
-            nsight-tools = pkgs.runCommand "check-nsight-tools"
-              { nativeBuildInputs = [ nvidia-sdk ]; }
-              ''
-                echo "=== Nsight tools check ==="
-
-                ncuDir="$CUDA_PATH/nsight-compute-${versions.nsight.compute.version}"
-                nsysDir="$CUDA_PATH/nsight-systems-${versions.nsight.systems.version}"
-
-                # Nsight Compute directory
-                test -d "$ncuDir" || (echo "FAIL: $ncuDir missing" && exit 1)
-                echo "ok: nsight-compute directory exists"
-
-                # Nsight Systems directory
-                test -d "$nsysDir" || (echo "FAIL: $nsysDir missing" && exit 1)
-                echo "ok: nsight-systems directory exists"
-
-                # CLI wrappers
-                test -x "$CUDA_PATH/bin/ncu"  || (echo "FAIL: ncu binary missing" && exit 1)
-                echo "ok: ncu binary present"
-
-                test -x "$CUDA_PATH/bin/nsys" || (echo "FAIL: nsys binary missing" && exit 1)
-                echo "ok: nsys binary present"
-
-                # Host binaries in arch-specific paths
-                ncuHost="$ncuDir/${versions.nsight.compute.${system}.path}"
-                test -d "$ncuHost" || (echo "FAIL: ncu host dir missing: $ncuHost" && exit 1)
-                echo "ok: ncu host path exists ($ncuHost)"
-
-                nsysHost="$nsysDir/${versions.nsight.systems.${system}.path}"
-                test -d "$nsysHost" || (echo "FAIL: nsys host dir missing: $nsysHost" && exit 1)
-                echo "ok: nsys host path exists ($nsysHost)"
-
-                echo "=== Nsight tools: PASS ===" > $out
-              '';
+            setup-hook = pkgs.runCommand "check-setup-hook" { nativeBuildInputs = [ nvidia-sdk ]; } ''
+              echo "=== Setup-hook check ==="
+              for var in CUDA_PATH CUDA_HOME CUDNN_HOME TENSORRT_HOME; do
+                eval "val=\$$var"
+                test -n "$val" || (echo "FAIL: $var not set" && exit 1)
+                echo "ok: $var=$val"
+              done
+              echo "=== Setup-hook: PASS ===" > $out
+            '';
 
             # ── Platform arch consistency ─────────────────────────────────
-            # Verifies that the platform helper produces a valid cudaArch
-            # for the current system.
             platform-arch = pkgs.runCommand "check-platform-arch" { } ''
               echo "=== Platform arch check ==="
               arch="${platform.cudaArch}"
@@ -419,84 +349,9 @@
               esac
               echo "=== Platform arch: PASS ===" > $out
             '';
-
-            # ── Python imports (NGC packages) ─────────────────────────────
-            python-imports = pkgs.runCommand "check-python-imports"
-              {
-                nativeBuildInputs = [ python ];
-                LD_LIBRARY_PATH = "${nvidia-sdk}/lib64";
-              }
-              ''
-                export HOME=$(mktemp -d)
-                ${python}/bin/python3 -c "
-                import sys
-                print('Python:', sys.version)
-                import numpy; print('numpy:', numpy.__version__)
-                import torch; print('torch:', torch.__version__)
-                print('CUDA available:', torch.cuda.is_available())
-                "
-                echo "Python imports: ok" > $out
-              '';
           };
 
           apps = {
-            tritonserver = {
-              type = "app";
-              program = "${tritonserver}/bin/tritonserver";
-              meta.description = "NVIDIA Triton Inference Server";
-            };
-
-            # TensorRT-LLM CLI tools
-            trtllm-bench = {
-              type = "app";
-              program = "${python}/bin/trtllm-bench";
-              meta.description = "TensorRT-LLM benchmarking tool";
-            };
-
-            trtllm-build = {
-              type = "app";
-              program = "${python}/bin/trtllm-build";
-              meta.description = "TensorRT-LLM engine builder";
-            };
-
-            trtllm-serve = {
-              type = "app";
-              program = "${python}/bin/trtllm-serve";
-              meta.description = "TensorRT-LLM inference server";
-            };
-
-            torchrun = {
-              type = "app";
-              program = "${python}/bin/torchrun";
-              meta.description = "PyTorch distributed training launcher";
-            };
-
-            # Nsight profilers (CLI)
-            ncu = {
-              type = "app";
-              program = "${nvidia-sdk}/bin/ncu";
-              meta.description = "NVIDIA Nsight Compute (CLI)";
-            };
-
-            nsys = {
-              type = "app";
-              program = "${nvidia-sdk}/bin/nsys";
-              meta.description = "NVIDIA Nsight Systems (CLI)";
-            };
-
-            # Nsight profilers (GUI)
-            ncu-ui = {
-              type = "app";
-              program = "${nsight-gui-apps}/bin/ncu-ui";
-              meta.description = "NVIDIA Nsight Compute (GUI)";
-            };
-
-            nsys-ui = {
-              type = "app";
-              program = "${nsight-gui-apps}/bin/nsys-ui";
-              meta.description = "NVIDIA Nsight Systems (GUI)";
-            };
-
             # Monitoring
             nvtop = {
               type = "app";
@@ -513,7 +368,8 @@
         };
 
       flake = {
-        overlays.default = final: prev:
+        overlays.default =
+          final: prev:
           let
             versions = import ./nix/versions.nix;
             modern = (import ./nix/modern.nix final prev).modern;
@@ -577,7 +433,10 @@
               cuda = final.cuda;
             };
 
-            cutlass = final.callPackage ./nix/pkgs/cutlass.nix { inherit versions; cuda = final.cuda; };
+            cutlass = final.callPackage ./nix/pkgs/cutlass.nix {
+              inherit versions;
+              cuda = final.cuda;
+            };
 
             nvidia-sdk = final.callPackage ./nix/pkgs/nvidia-sdk.nix {
               inherit versions;
@@ -588,35 +447,6 @@
               cutlass = final.cutlass;
               cutensor = final.cutensor;
             };
-
-            tritonserver =
-              let
-                container = modern.container-to-nix {
-                  name = "ngc-${versions.ngc.version}-rootfs";
-                  imageRef = versions.triton-trtllm-container.${stdenv.hostPlatform.system}.ref;
-                  hash = versions.triton-trtllm-container.${stdenv.hostPlatform.system}.hash;
-                };
-              in
-              final.callPackage ./nix/pkgs/tritonserver.nix {
-                inherit versions modern;
-                nvidia-sdk = final.nvidia-sdk;
-                containerSrc = container;
-                backend = "trtllm";
-              };
-
-            # Python with complete NGC packages (torch, triton, tensorrt_llm, numpy, etc.)
-            python =
-              let
-                container = modern.container-to-nix {
-                  name = "ngc-${versions.ngc.version}-rootfs";
-                  imageRef = versions.triton-trtllm-container.${stdenv.hostPlatform.system}.ref;
-                  hash = versions.triton-trtllm-container.${stdenv.hostPlatform.system}.hash;
-                };
-              in
-              final.callPackage ./nix/pkgs/ngc-python.nix {
-                containerSrc = container;
-                nvidia-sdk = final.nvidia-sdk;
-              };
 
             cuda-samples = final.callPackage ./nix/pkgs/cuda-samples.nix {
               inherit versions;
@@ -638,12 +468,6 @@
 
             nvtop = final.monitoring-tools.nvtop;
             btop-nvml = final.monitoring-tools.btop;
-
-            # Nsight GUI profilers
-            nsight-gui-apps = final.callPackage ./nix/pkgs/nsight-gui-apps.nix {
-              inherit versions;
-              nvidia-sdk = final.nvidia-sdk;
-            };
           };
 
         nixosModules.default = import ./nix/modules/nvidia-sdk.nix;
