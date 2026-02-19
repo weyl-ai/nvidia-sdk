@@ -62,7 +62,7 @@
     # NCCL is BSD-3-Clause — fetched from PyPI (NVIDIA's official distribution)
     x86_64-linux = {
       url = "https://files.pythonhosted.org/packages/4a/4e/44dbb46b3d1b0ec61afda8e84837870f2f9ace33c564317d59b70bc19d3e/nvidia_nccl_cu12-2.28.9-py3-none-manylinux_2_18_x86_64.whl";
-      hash = "sha256-Ta9tHpdQVel+xb22iGc+A2OwYSnAiT2UtdVNLs1zDTw=";
+      hash = "sha256-SFd22qhEfaXaOWga9FWqOywlht3PSvh3JJXnxTLH5as=";
     };
 
     aarch64-linux = {
